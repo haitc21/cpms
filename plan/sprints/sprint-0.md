@@ -8,20 +8,20 @@
 
 | Story | Points | Owner | OSPS dependency | Status |
 |---|---:|---|---|---|
-| CPMS-001 | 5 | Agent | none | Ready |
-| CPMS-002 | 5 | Agent | none | Ready |
-| CPMS-003 | 3 | Agent | none | Ready |
-| CPMS-004 | 5 | Agent | none | Ready |
+| CPMS-001 | 5 | Agent | none | Done |
+| CPMS-002 | 5 | Agent | none | Done |
+| CPMS-003 | 3 | Agent | none | Done |
+| CPMS-004 | 5 | Agent | none | Done |
 
 ## Delivery tasks
 
-- [ ] Confirm contract/schema readiness (none required for Sprint 0 domain contracts).
-- [ ] Add failing acceptance/unit tests for each story.
-- [ ] Implement the smallest vertical slice per story.
-- [ ] Add integration coverage for PostgreSQL/RabbitMQ readiness.
-- [ ] Verify redaction, observability, and failure behavior.
-- [ ] Update operational documentation for local start/health.
-- [ ] Run the Definition of Done quality gates.
+- [x] Confirm contract/schema readiness (none required for Sprint 0 domain contracts).
+- [x] Add failing acceptance/unit tests for each story.
+- [x] Implement the smallest vertical slice per story.
+- [x] Add integration coverage for PostgreSQL/RabbitMQ readiness.
+- [x] Verify redaction, observability, and failure behavior.
+- [x] Update operational documentation for local start/health.
+- [x] Run the Definition of Done quality gates.
 
 ## Story details
 
@@ -60,12 +60,20 @@
 ## Review evidence
 
 - Demo scenario: start CPMS API, call `/health/live` and `/health/ready` against local Compose.
-- Test/migration commands and results: _(filled at story completion)_
-- Contract checksum: N/A (no domain contracts in Sprint 0)
-- Known limitations: no provider/domain APIs; Alembic has empty baseline only for CI migration check; Valkey present in Compose but unused by CPMS.
+- Test/migration commands and results:
+  - `uv sync --frozen --all-extras` — ok
+  - `ruff format --check`, `ruff check`, `mypy` — ok
+  - `pytest -q` — 18 passed (unit + integration against Compose)
+  - `alembic upgrade head` — ok (empty baseline)
+  - `python -m cpms.contracts.validate_contracts` — ok (0 fixtures)
+  - `python -m detect_secrets scan --baseline .secrets.baseline ...` — ok
+  - `docker build -t cpms:sprint0 .` — ok (Python 3.12 image)
+  - Compose postgres/rabbitmq/valkey remained healthy
+- Contract checksum: empty Sprint 0 manifest (`fixtures: {}`)
+- Known limitations: no provider/domain APIs; Alembic empty baseline only; Valkey unused by CPMS readiness.
 
 ## Retrospective actions
 
-- Keep: _(filled at sprint end)_
-- Improve: _(filled at sprint end)_
-- One measurable action for next sprint: _(filled at sprint end)_
+- Keep: TDD per story with Compose-backed readiness proof.
+- Improve: prefer `python -m detect_secrets` over blocked console scripts on Windows.
+- One measurable action for next sprint: add domain migration and golden contract fixtures before provider APIs.

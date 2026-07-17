@@ -25,8 +25,14 @@ py -3.12 -m uv run cpms worker --once
 ## Quality gates
 
 ```powershell
+py -3.12 -m uv sync --frozen --all-extras
 py -3.12 -m uv run ruff format --check src tests
 py -3.12 -m uv run ruff check src tests
 py -3.12 -m uv run mypy
 py -3.12 -m uv run pytest -q
+py -3.12 -m uv run alembic upgrade head
+py -3.12 -m uv run python -m cpms.contracts.validate_contracts
+py -3.12 -m uv run python -m detect_secrets scan --baseline .secrets.baseline --exclude-files "(?i)(.*\.venv/.*|.*uv\.lock$|.*\.git/.*)"
 ```
+
+CI definition: `.github/workflows/ci.yml`.
