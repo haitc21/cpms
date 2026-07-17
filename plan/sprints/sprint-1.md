@@ -1,62 +1,58 @@
-# Sprint 1 — Stable contracts and durable operation core
+# Sprint 1 — Contract and error semantics
 
 **Dates:** 2026-07-31 to 2026-08-14  
-**Capacity:** focused contract + persistence + messaging core  
-**Sprint Goal:** CPMS owns executable common message/API contracts with golden fixtures and checksums; persists providers/connections/credentials/operations with an enforceable state machine and transactional outbox/inbox skeleton; OSPS pins those contracts and runs a robust RabbitMQ consumer/publisher with envelope validation, error normalization, and retry classification—without provider mutations yet.
+**Capacity:** 13 committed points in CPMS; no stretch work begins before review
+**Sprint Goal:** CPMS publishes executable message/error contracts whose fixtures and JSON Schemas share one checksum manifest; OSPS can pin them without drift.
 
-## Selected stories
+## Committed stories — Must
 
 | Story | Points | Owner | OSPS dependency | Status |
 |---|---:|---|---|---|
-| CPMS-101 | 8 | Unassigned | OSPS-101 | Ready |
-| CPMS-102 | 5 | Unassigned | OSPS-103 (error envelope) | Ready |
-| CPMS-103 | 8 | Unassigned | none | Ready |
-| CPMS-104 | 8 | Unassigned | none | Ready |
-| CPMS-105 | 5 | Unassigned | none | Ready |
-| CPMS-106 | 8 | Unassigned | OSPS-102 | Ready |
+| CPMS-101 — Canonical message envelope and schemas | 8 | Unassigned | OSPS-101 | Ready |
+| CPMS-102 — Common error and API response model | 5 | Unassigned | OSPS-103 | Ready |
 
-**Total:** 42 points (Must)
+**Total:** 13 points.
 
-## Delivery order (contract-first)
+## Deferred to Sprint 1B
 
-1. CPMS-101 → OSPS-101 (pin immediately after checksum exists)
-2. CPMS-102 → shared error fixtures used by OSPS-103
-3. CPMS-103 → CPMS-104 → CPMS-105
-4. CPMS-106 ∥ OSPS-102 (topology first on OSPS; outbox/inbox on CPMS)
-5. OSPS-103 → OSPS-104
+- CPMS-103 — Initial database migration and unit of work.
+- CPMS-104 — Operation state machine and immutable history.
+- CPMS-105 — Idempotent operation creation.
+- CPMS-106 — Transactional outbox publisher and inbox consumer.
 
-## Delivery tasks
+These stories retain their product-backlog priority and points. They require a separate reviewed implementation plan and are not part of Sprint 1 exit criteria.
 
-- [ ] Confirm design §10–§14 for envelope, topology, DB tables, and errors.
-- [ ] Add failing contract tests and golden fixtures before handlers.
-- [ ] Land Alembic baseline for provider/ops/messaging tables on PostgreSQL 18.
-- [ ] Implement operation transitions + idempotency with concurrency tests.
-- [ ] Implement outbox/inbox with confirm-before-ack semantics.
-- [ ] Coordinate OSPS pin + RabbitMQ runtime + envelope dispatch.
-- [ ] Verify redaction: no password/token/`user_data` in fixtures or events.
-- [ ] Run Definition of Done quality gates; update this backlog evidence.
+## Delivery order
 
-## Risks and impediments
+1. Extend manifest validation to cover fixtures and JSON Schemas.
+2. CPMS-101 creates canonical envelope, schemas, and five golden fixtures.
+3. OSPS-101 pins the completed CPMS manifest and files.
+4. CPMS-102 adds the common error model and all required HTTP mappings.
+5. OSPS-103 consumes the pinned error contract for SDK normalization and retry classification.
 
-| Risk/impediment | Owner | Mitigation | Status |
-|---|---|---|---|
-| Contract drift between repos | Joint | CPMS checksum first; OSPS pin in same sprint; CI validates both | Open |
-| 42 points exceeds capacity | Joint | Keep Sprint 1 strictly foundation; defer inventory/provider APIs | Open |
-| Windows asyncio/psycopg | CPMS | Keep SelectorEventLoop policy; sync probes where needed | Open |
-| Outbox publisher races | CPMS | DB unique + `FOR UPDATE SKIP LOCKED` + confirm before mark published | Open |
+## Definition of Done
+
+- Every golden fixture validates through Pydantic and Draft 2020-12 JSON Schema.
+- Unknown major schema versions reject; additive fields remain compatible.
+- Command fixture contains only a credential reference; event/inventory fixtures omit it.
+- Manifest detects changes under both `fixtures/` and `jsonschema/`.
+- Error mappings cover validation, not-found, conflict, capability, provider, timeout, and internal failures.
+- CPMS has no OpenStackSDK dependency and no Sprint 1B database/messaging scaffold.
+- Ruff, mypy, pytest, contracts, secret scan, Docker build, and `git diff --check` pass.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| CPMS/OSPS drift | OSPS stores canonical manifest snapshot and validates every pinned file in CI. |
+| Secret leakage in fixtures/errors | Explicit forbidden-key tests plus detect-secrets. |
+| Scope creep into persistence/messaging | CPMS-103..106 remain deferred and absent from this plan. |
 
 ## Review evidence
 
-- Demo scenario: _(fill at review)_ create operation via domain service, outbox publishes command fixture validated by OSPS consumer stub; event inbox dedupes duplicate `message_id`.
-- Test/migration commands and results: _(fill at review)_
-- Contract checksum: _(fill at review)_
-- Known limitations: no public provider CRUD yet; no OpenStack provider calls; no inventory tables.
-
-## Retrospective actions
-
-- Keep: _(fill)_
-- Improve: _(fill)_
-- One measurable action for next sprint: _(fill)_
+- Test counts: fill only after commands run.
+- Contract manifest SHA-256: fill only after CPMS-102 refreshes the final manifest.
+- Known limitations: no database domain, provider CRUD, RabbitMQ consumer, inventory, or OpenStack call.
 
 ## Implementation plan
 

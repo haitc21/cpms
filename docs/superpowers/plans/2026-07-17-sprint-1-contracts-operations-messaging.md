@@ -1,132 +1,309 @@
-# Sprint 1 Contracts, Operations, and Messaging Implementation Plan
+# Sprint 1A Contracts and Error Semantics Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Do not start Sprint 1B from this document.
 
-**Goal:** Deliver executable CPMS↔OSPS contracts, CPMS durable operation core (DB + state machine + idempotency + outbox/inbox), and OSPS robust RabbitMQ runtime with envelope validation—without provider CRUD, inventory sync, or OpenStack mutations.
+**Goal:** Deliver canonical CPMS message/error contracts, a verifiable OSPS contract pin, and deterministic OpenStack error/retry classification without database, consumer, or provider-operation work.
 
-**Architecture:** CPMS remains the canonical contract and PostgreSQL source of truth. OSPS is a stateless adapter that pins CPMS fixtures/checksums. Commands/events use a versioned envelope on durable RabbitMQ topic exchanges. CPMS writes operations and outbox rows in one transaction; a publisher confirms before marking published. CPMS consumes events through an inbox. OSPS validates envelopes before dispatch and never invents common fields.
+**Architecture:** CPMS owns Pydantic models, JSON Schemas, golden fixtures, and one checksum manifest covering both schemas and fixtures. OSPS stores a byte-for-byte pin plus a second immutable copy of the CPMS manifest for standalone CI. OSPS maps OpenStackSDK exceptions into the pinned common error contract and produces a retry decision; RabbitMQ acknowledgement behavior is deferred with OSPS-102/104 to Sprint 1B.
 
-**Tech Stack:** CPython 3.12, FastAPI/Pydantic v2, SQLAlchemy 2 + Alembic + Psycopg 3 (CPMS only), aio-pika 10.0.1, OpenStackSDK 4.17.0 present in OSPS but unused for mutations this sprint, uv lockfiles, pytest/ruff/mypy/detect-secrets.
+**Tech Stack:** CPython 3.12, Pydantic 2.13.4, FastAPI 0.139.0, OpenStackSDK 4.17.0 in OSPS only, pytest, `jsonschema`, uv, ruff, mypy, detect-secrets.
 
 ## Global Constraints
 
-- CPython `>=3.12,<3.13` only; never Python 3.14.
-- CPMS must not depend on OpenStackSDK; OSPS must not add SQLAlchemy/Alembic/PostgreSQL/MongoDB/Valkey.
-- Contract-first: failing fixture/contract tests before producer/consumer behavior.
-- Secrets (password, token, Authorization, CA private material, `user_data`) never appear in fixtures, logs, events, or API responses.
-- Unknown major `schema_version` → reject safely (DLQ / contract failure); additive minor fields tolerated.
-- Topology defaults from design §10; names configurable via settings.
-- No Sprint 2+ provider CRUD, inventory typed tables, or real OpenStack operations.
-- Commits scoped per story or coherent vertical slice; no force push; no merge without review.
-- Prefix supported commands with `rtk` where available.
-- CodeGraph: prefer `codegraph_explore` when `.codegraph/` indexes CPMS/OSPS; otherwise note and use direct reads.
+- CPython `>=3.12,<3.13`; never Python 3.14.
+- CPMS must not depend on OpenStackSDK; OSPS must not add database or Valkey dependencies.
+- CPMS is the only editable source of common contracts. OSPS copies contracts byte-for-byte.
+- Manifest covers every non-`.gitkeep` file below `fixtures/` and `jsonschema/`.
+- Unknown major `schema_version` is rejected; additive unknown fields are accepted.
+- Fixtures, schemas, logs, errors, and test output contain no password, token, Authorization value, CA private material, or `user_data`.
+- Commands may contain `credential_reference`; events and inventory fixtures must not contain it.
+- CodeGraph-first for source discovery; use RTK for supported external commands.
+- Scope is CPMS-101, CPMS-102, OSPS-101, and OSPS-103 only. CPMS-103..106 and OSPS-102/104 require a separate Sprint 1B plan.
 
-## ManageIQ / OpenStack assumptions (adopted, not copied)
-
-| Source | Adopted idea | CPMS/OSPS translation |
-|---|---|---|
-| ManageIQ `MiqTask` / `Job` | Durable task status + message updates | `operations` + immutable `operation_events` |
-| ManageIQ provider + authentication records | Separate config vs secrets | `providers` / `provider_connections` / `credentials` tables (encrypted later Sprint 2) |
-| ManageIQ `ems_ref` | Provider identity ≠ internal UUID | Columns reserved on ops targets; inventory uniqueness deferred to Sprint 3 |
-| ManageIQ queue workers | At-least-once work items | Outbox/inbox + OSPS replay-safe handlers (precondition stubs in Sprint 1) |
-| OpenStackSDK exceptions | Map SDK hierarchy, keep request IDs | OSPS-103 normalization; no raw body leakage |
-| Rejected | Rails AASM copy, EAV inventory, notification bus | Explicit enum transitions; typed tables later; RabbitMQ only |
-
-## File map (create/modify)
+## File Map
 
 ### CPMS
 
-| Path | Responsibility |
-|---|---|
-| `src/cpms/contracts/messages/envelope.py` | Pydantic envelope + version rules |
-| `src/cpms/contracts/messages/types.py` | Message type constants |
-| `src/cpms/contracts/errors.py` | Common error model |
-| `src/cpms/contracts/api/responses.py` | API error/response envelope |
-| `src/cpms/contracts/jsonschema/*.json` | Generated/exported JSON Schema |
-| `src/cpms/contracts/fixtures/**/*.json` | Golden fixtures |
-| `src/cpms/contracts/checksums.json` | SHA-256 manifest (via `write_manifest`) |
-| `src/cpms/domain/operations/states.py` | State enum + transition table |
-| `src/cpms/domain/operations/service.py` | Create/transition/idempotency rules |
-| `src/cpms/infrastructure/db/models/*.py` | SQLAlchemy models |
-| `src/cpms/infrastructure/db/unit_of_work.py` | Async session/UoW |
-| `src/cpms/infrastructure/db/repositories/*.py` | Repositories |
-| `alembic/versions/20260731_0001_sprint1_core.py` | Baseline migration |
-| `src/cpms/infrastructure/messaging/outbox.py` | Outbox writer + publisher loop |
-| `src/cpms/infrastructure/messaging/inbox.py` | Inbox consumer dedupe |
-| `src/cpms/infrastructure/messaging/topology.py` | Exchange/queue declaration helpers |
-| `tests/contract/**` | Fixture validation tests |
-| `tests/unit/domain/**` | State machine / idempotency |
-| `tests/integration/**` | Postgres + RabbitMQ |
+- Modify `src/cpms/contracts/validate.py`: hash fixtures and JSON Schemas.
+- Create `src/cpms/contracts/messages/envelope.py`: envelope and version validation.
+- Create `src/cpms/contracts/messages/types.py`: supported message type constants.
+- Create `src/cpms/contracts/errors.py`: common error contract and stable codes.
+- Create `src/cpms/api/errors.py`: FastAPI error handlers.
+- Modify `src/cpms/main.py`: register handlers.
+- Create `src/cpms/contracts/fixtures/**`: golden fixtures.
+- Create `src/cpms/contracts/jsonschema/**`: generated schemas.
+- Modify `src/cpms/contracts/checksums.json`: canonical manifest.
+- Modify/create contract and API tests listed below.
 
 ### OSPS
 
-| Path | Responsibility |
-|---|---|
-| `src/osps/contracts/**` | Pinned copy of CPMS schemas/fixtures/checksums |
-| `src/osps/messaging/topology.py` | Declare durable topology |
-| `src/osps/messaging/connection.py` | Robust connection factory |
-| `src/osps/messaging/consumer.py` | Prefetch, manual ack, reconnect |
-| `src/osps/messaging/publisher.py` | Publisher confirms |
-| `src/osps/messaging/runtime.py` | Wire lifecycle + consume loop |
-| `src/osps/openstack/errors.py` | Error normalization + retry class |
-| `src/osps/application/dispatch.py` | Envelope validate → handler route |
-| `src/osps/application/handlers/noop.py` | Sprint 1 noop handler for validated commands |
-| `tests/contract/**` | Pin checksum + fixture validation |
-| `tests/integration/**` | RabbitMQ topology/redelivery |
+- Modify `src/osps/contracts/validate.py`: same local manifest algorithm plus canonical-pin comparison.
+- Copy CPMS `fixtures/`, `jsonschema/`, and `checksums.json` into `src/osps/contracts/`.
+- Create `src/osps/contracts/cpms_checksums.pinned.json`: byte-for-byte CPMS manifest snapshot for standalone CI.
+- Modify `.github/workflows/ci.yml`: validate local tree and pinned manifest.
+- Create `src/osps/openstack/errors.py`: SDK exception normalization.
+- Create `src/osps/openstack/retry.py`: deterministic retry decisions.
+- Create contract and unit tests listed below.
 
 ---
 
-### Task 1: CPMS-101 — Canonical envelope and golden fixtures
+### Task 0: Contract manifest covers fixtures and JSON Schemas
 
 **Files:**
-- Create: `src/cpms/contracts/messages/envelope.py`
-- Create: `src/cpms/contracts/messages/types.py`
-- Create: `src/cpms/contracts/fixtures/commands/connection_validate.json`
-- Create: `src/cpms/contracts/fixtures/events/operation_progress.json`
-- Create: `src/cpms/contracts/fixtures/events/operation_completed.json`
-- Create: `src/cpms/contracts/fixtures/events/operation_failed.json`
-- Create: `src/cpms/contracts/fixtures/events/inventory_batch.json`
-- Create: `src/cpms/contracts/jsonschema/message_envelope.schema.json`
-- Modify: `src/cpms/contracts/checksums.json` via `python -m cpms.contracts.write_manifest`
-- Test: `tests/contract/test_envelope_fixtures.py`
+- Modify `cpms/src/cpms/contracts/validate.py`
+- Modify `cpms/tests/contract/test_contract_manifest.py`
+- Modify `osps/src/osps/contracts/validate.py`
+- Modify `osps/tests/contract/test_contract_manifest.py`
 
 **Interfaces:**
-- Produces: `class MessageEnvelope(BaseModel)` with fields matching design §10.1; `def parse_schema_version(v: str) -> tuple[int, int]`; `def assert_supported_major(v: str, supported_major: int = 1) -> None`
-- Consumes: none
 
-- [ ] **Step 1: Write the failing contract test**
+Produces `compute_contract_checksums(base: Path) -> dict[str, str]`,
+`validate_contract_tree(root: Path | None = None) -> ValidationResult`, and
+`write_contract_manifest(root: Path | None = None) -> ValidationResult`. Their complete
+implementations are in Step 3.
+
+- [ ] **Step 1: Add the failing test in both repositories**
+
+Use the package-specific import (`cpms` or `osps`):
 
 ```python
-import json
-from pathlib import Path
-from cpms.contracts.messages.envelope import MessageEnvelope, assert_supported_major
+def test_manifest_detects_jsonschema_change(tmp_path: Path) -> None:
+    fixtures = tmp_path / "fixtures"
+    schemas = tmp_path / "jsonschema"
+    fixtures.mkdir()
+    schemas.mkdir()
+    (fixtures / "message.json").write_text("{}", encoding="utf-8")
+    schema = schemas / "message.schema.json"
+    schema.write_text("{}", encoding="utf-8")
 
-FIXTURES = Path("src/cpms/contracts/fixtures")
+    write_contract_manifest(tmp_path)
+    schema.write_text('{"type": "object"}', encoding="utf-8")
 
-def test_connection_validate_fixture_validates():
-    raw = json.loads((FIXTURES / "commands/connection_validate.json").read_text())
-    env = MessageEnvelope.model_validate(raw)
-    assert env.message_type == "openstack.connection.validate"
-    assert env.credential_reference is not None
-    assert "password" not in json.dumps(raw)
+    result = validate_contract_tree(tmp_path)
+    assert result.ok is False
+    assert result.message == "contract checksum mismatch"
 
-def test_unknown_major_version_rejected():
-    with pytest.raises(ValueError, match="unsupported major"):
-        assert_supported_major("2.0")
+
+def test_manifest_uses_files_key(tmp_path: Path) -> None:
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "jsonschema").mkdir()
+    write_contract_manifest(tmp_path)
+    manifest = json.loads((tmp_path / "checksums.json").read_text(encoding="utf-8"))
+    assert manifest == {"files": {}}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Verify RED**
 
-Run: `rtk pytest tests/contract/test_envelope_fixtures.py -q`  
-Expected: FAIL with `ModuleNotFoundError` or missing fixture path.
+Run in each repo:
 
-- [ ] **Step 3: Implement envelope + fixtures (no secrets)**
+```powershell
+py -3.12 -m uv run pytest tests/contract/test_contract_manifest.py -q
+```
+
+Expected: the schema-change test fails because Sprint 0 hashes only `fixtures/`, or the manifest still uses the `fixtures` key.
+
+- [ ] **Step 3: Replace the checksum implementation in both packages**
+
+Keep the existing `ValidationResult` and `main()`, and replace the checksum/validation/writer functions with the package-adjusted version below:
 
 ```python
+def _contract_files(base: Path) -> list[Path]:
+    files: list[Path] = []
+    for directory in ("fixtures", "jsonschema"):
+        root = base / directory
+        if root.exists():
+            files.extend(
+                path
+                for path in root.rglob("*")
+                if path.is_file() and path.name != ".gitkeep"
+            )
+    return sorted(files)
+
+
+def compute_contract_checksums(base: Path) -> dict[str, str]:
+    return {
+        path.relative_to(base).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in _contract_files(base)
+    }
+
+
+def validate_contract_tree(root: Path | None = None) -> ValidationResult:
+    base = root or CONTRACTS_ROOT
+    manifest_path = base / "checksums.json"
+    computed = compute_contract_checksums(base)
+    if not manifest_path.exists():
+        return ValidationResult(False, len(computed), "missing checksums.json")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ValidationResult(False, len(computed), "invalid checksums.json")
+    if manifest.get("files") != computed:
+        return ValidationResult(False, len(computed), "contract checksum mismatch")
+    return ValidationResult(True, len(computed))
+
+
+def write_contract_manifest(root: Path | None = None) -> ValidationResult:
+    base = root or CONTRACTS_ROOT
+    (base / "fixtures").mkdir(parents=True, exist_ok=True)
+    (base / "jsonschema").mkdir(parents=True, exist_ok=True)
+    computed = compute_contract_checksums(base)
+    (base / "checksums.json").write_text(
+        json.dumps({"files": computed}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return ValidationResult(True, len(computed), "manifest written")
+```
+
+- [ ] **Step 4: Refresh both empty manifests and verify GREEN**
+
+```powershell
+cd C:\work\Cloud\project\CMP\src\cpms
+py -3.12 -m uv run python -m cpms.contracts.write_manifest
+py -3.12 -m uv run pytest tests/contract -q
+cd C:\work\Cloud\project\CMP\src\osps
+py -3.12 -m uv run python -m osps.contracts.write_manifest
+py -3.12 -m uv run pytest tests/contract -q
+```
+
+Expected: both contract suites pass and both manifests contain `{"files": {}}` before Task 1 adds contracts.
+
+- [ ] **Step 5: Commit independently in both repos**
+
+```powershell
+rtk git add src tests/contract
+rtk git commit -m "fix(contracts): checksum fixtures and jsonschema"
+```
+
+---
+
+### Task 1: CPMS-101 canonical envelope, schemas, and golden fixtures
+
+**Files:**
+- Create `cpms/src/cpms/contracts/messages/__init__.py`
+- Create `cpms/src/cpms/contracts/messages/envelope.py`
+- Create `cpms/src/cpms/contracts/messages/types.py`
+- Create `cpms/src/cpms/contracts/fixtures/commands/connection_validate.json`
+- Create `cpms/src/cpms/contracts/fixtures/events/operation_progress.json`
+- Create `cpms/src/cpms/contracts/fixtures/events/operation_completed.json`
+- Create `cpms/src/cpms/contracts/fixtures/events/operation_failed.json`
+- Create `cpms/src/cpms/contracts/fixtures/events/inventory_batch.json`
+- Create `cpms/src/cpms/contracts/jsonschema/message_envelope.schema.json`
+- Create `cpms/tests/contract/test_envelope_contract.py`
+- Modify `cpms/src/cpms/contracts/checksums.json`
+
+**Interfaces:** `MessageEnvelope`, `parse_schema_version()`, `assert_supported_major()`, and the five constants below.
+
+- [ ] **Step 1: Add dependencies and lock them**
+
+Add `jsonschema>=4.25,<5` to CPMS dev dependencies and run:
+
+```powershell
+py -3.12 -m uv lock
+py -3.12 -m uv sync --frozen --all-extras
+```
+
+Expected: `uv.lock` changes and `py -3.12 -m uv run python -c "import jsonschema"` exits 0.
+
+- [ ] **Step 2: Write the failing contract tests**
+
+```python
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from jsonschema import Draft202012Validator
+
+from cpms.contracts.messages.envelope import MessageEnvelope, assert_supported_major
+
+ROOT = Path(__file__).resolve().parents[2] / "src" / "cpms" / "contracts"
+FIXTURES = ROOT / "fixtures"
+SCHEMA_PATH = ROOT / "jsonschema" / "message_envelope.schema.json"
+FIXTURE_PATHS = (
+    FIXTURES / "commands" / "connection_validate.json",
+    FIXTURES / "events" / "operation_progress.json",
+    FIXTURES / "events" / "operation_completed.json",
+    FIXTURES / "events" / "operation_failed.json",
+    FIXTURES / "events" / "inventory_batch.json",
+)
+
+
+@pytest.mark.parametrize("fixture_path", FIXTURE_PATHS, ids=lambda path: path.stem)
+def test_every_fixture_validates_with_pydantic_and_jsonschema(fixture_path: Path) -> None:
+    raw = json.loads(fixture_path.read_text(encoding="utf-8"))
+    MessageEnvelope.model_validate(raw)
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(raw)
+
+
+@pytest.mark.parametrize("fixture_path", FIXTURE_PATHS)
+def test_fixtures_have_no_inline_secrets(fixture_path: Path) -> None:
+    text = fixture_path.read_text(encoding="utf-8").lower()
+    for forbidden in ("password", "token", "authorization", "user_data", "private_key"):
+        assert forbidden not in text
+
+
+@pytest.mark.parametrize("fixture_path", FIXTURE_PATHS[1:])
+def test_events_omit_credential_reference(fixture_path: Path) -> None:
+    raw = json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert "credential_reference" not in raw
+
+
+def test_command_contains_credential_reference() -> None:
+    raw = json.loads(FIXTURE_PATHS[0].read_text(encoding="utf-8"))
+    assert raw["credential_reference"] == "66666666-6666-4666-8666-666666666666"
+
+
+def test_unknown_major_rejected_and_unknown_minor_field_accepted() -> None:
+    with pytest.raises(ValueError, match="unsupported major"):
+        assert_supported_major("2.0")
+    raw = json.loads(FIXTURE_PATHS[0].read_text(encoding="utf-8"))
+    raw["future_minor_field"] = {"safe": True}
+    MessageEnvelope.model_validate(raw)
+```
+
+- [ ] **Step 3: Verify RED**
+
+```powershell
+py -3.12 -m uv run pytest tests/contract/test_envelope_contract.py -q
+```
+
+Expected: import or fixture-path failure.
+
+- [ ] **Step 4: Implement envelope and message types**
+
+`envelope.py`:
+
+```python
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def parse_schema_version(version: str) -> tuple[int, int]:
+    parts = version.split(".")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        raise ValueError(f"invalid schema version: {version}")
+    return int(parts[0]), int(parts[1])
+
+
+def assert_supported_major(version: str, *, supported_major: int = 1) -> None:
+    major, _minor = parse_schema_version(version)
+    if major != supported_major:
+        raise ValueError(f"unsupported major schema version: {version}")
+
+
 class MessageEnvelope(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     message_id: UUID
-    message_type: str
-    schema_version: str = Field(pattern=r"^\d+\.\d+$")
+    message_type: str = Field(min_length=1)
+    schema_version: str
     occurred_at: datetime
     correlation_id: UUID
     causation_id: UUID | None = None
@@ -137,398 +314,619 @@ class MessageEnvelope(BaseModel):
     credential_reference: UUID | None = None
     trace_context: dict[str, Any] = Field(default_factory=dict)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        assert_supported_major(value)
+        return value
 ```
 
-Golden fixture `connection_validate.json` uses synthetic UUIDs only; payload contains auth URL/project/region references—not passwords.
+`types.py`:
 
-- [ ] **Step 4: Export JSON Schema and refresh checksum**
+```python
+CONNECTION_VALIDATE = "openstack.connection.validate"
+OPERATION_PROGRESS = "cloud.operation.progress"
+OPERATION_COMPLETED = "cloud.operation.completed"
+OPERATION_FAILED = "cloud.operation.failed"
+INVENTORY_BATCH = "cloud.inventory.batch"
+```
 
-Run:
+- [ ] **Step 5: Create all five fixtures**
+
+Use the envelope from the approved design and synthetic UUIDs. The command uses `credential_reference`; each event omits that key entirely. Payloads are:
+
+```json
+{"auth_url":"https://example.test:5000/v3","user_domain_name":"Default","project_domain_name":"Default","project_id":"project-synthetic","region_name":"RegionOne","interface":"public"}
+```
+
+```json
+{"progress":25,"message":"validating service catalog"}
+```
+
+```json
+{"result":{"status":"VALID","capabilities":{"compute":true,"network":true,"image":true,"volume":true}}}
+```
+
+```json
+{"error":{"code":"PROVIDER_AUTHENTICATION_FAILED","message":"OpenStack authentication failed","category":"AUTHENTICATION","retryable":false,"provider":"OPENSTACK","provider_service":"identity","provider_request_id":"req-synthetic","details":{},"occurred_at":"2026-07-17T00:00:03Z"}}
+```
+
+```json
+{"sync_id":"77777777-7777-4777-8777-777777777777","resource_type":"instance","sequence":1,"is_last":true,"items":[]}
+```
+
+For all fixtures use `schema_version: "1.0"`, RFC3339 UTC times, and consistent operation/correlation/causation IDs. The event `causation_id` equals the command `message_id`.
+
+- [ ] **Step 6: Export schema, refresh manifest, and verify GREEN**
+
 ```powershell
-py -3.12 -m uv run python -c "from cpms.contracts.messages.envelope import MessageEnvelope; Path('src/cpms/contracts/jsonschema/message_envelope.schema.json').write_text(MessageEnvelope.model_json_schema()|json)"
+py -3.12 -m uv run python -c "import json; from pathlib import Path; from cpms.contracts.messages.envelope import MessageEnvelope; p=Path('src/cpms/contracts/jsonschema/message_envelope.schema.json'); p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps(MessageEnvelope.model_json_schema(),indent=2)+chr(10),encoding='utf-8')"
 py -3.12 -m uv run python -m cpms.contracts.write_manifest
-py -3.12 -m uv run python -m cpms.contracts.validate_contracts
-```
-Expected: `contracts ok (N fixtures)` with N ≥ 5.
-
-- [ ] **Step 5: Run tests and commit**
-
-Run: `rtk pytest tests/contract -q` → PASS  
-Commit: `feat(CPMS-101): add canonical message envelope and golden fixtures`
-
----
-
-### Task 2: OSPS-101 — Pin CPMS contracts
-
-**Files:**
-- Create/overwrite: `src/osps/contracts/**` as byte-for-byte pin of CPMS `jsonschema/`, `fixtures/`, `checksums.json`
-- Test: `tests/contract/test_pinned_checksum.py`
-
-**Interfaces:**
-- Consumes: CPMS `checksums.json` after Task 1
-- Produces: identical OSPS pin; `def assert_pin_matches_manifest() -> None`
-
-- [ ] **Step 1: Failing test for checksum mismatch detection**
-
-```python
-def test_pinned_checksums_match_files():
-    from osps.contracts.validate import validate_contract_tree
-    result = validate_contract_tree()
-    assert result.ok is True
-    assert result.fixture_count >= 5
+py -3.12 -m uv run pytest tests/contract -q
 ```
 
-- [ ] **Step 2: Run — expect FAIL until pin copied**
+Expected: all five fixtures validate twice; the manifest lists six files or more.
 
-- [ ] **Step 3: Copy pin from CPMS (PowerShell)**
+- [ ] **Step 7: Commit**
 
 ```powershell
-$src = "c:\work\Cloud\project\CMP\src\cpms\src\cpms\contracts"
-$dst = "c:\work\Cloud\project\CMP\src\osps\src\osps\contracts"
-Copy-Item "$src\checksums.json" "$dst\checksums.json" -Force
-Copy-Item "$src\fixtures" "$dst\fixtures" -Recurse -Force
-Copy-Item "$src\jsonschema" "$dst\jsonschema" -Recurse -Force
+rtk git add pyproject.toml uv.lock src/cpms/contracts tests/contract
+rtk git commit -m "feat(CPMS-101): add canonical message contracts"
 ```
-
-Do not edit fields in OSPS. Propose changes only in CPMS.
-
-- [ ] **Step 4: Verify both validators**
-
-Run: `rtk pytest tests/contract -q` in OSPS; `validate_contracts` in both → PASS  
-Commit: `feat(OSPS-101): pin CPMS contract fixtures and checksum`
 
 ---
 
-### Task 3: CPMS-102 — Common error and API response model
+### Task 2: CPMS-102 common error contract and API mappings
 
 **Files:**
-- Create: `src/cpms/contracts/errors.py`
-- Create: `src/cpms/api/errors.py` (FastAPI exception handlers)
-- Create: `src/cpms/contracts/fixtures/errors/provider_authentication_failed.json`
-- Test: `tests/contract/test_error_fixtures.py`, `tests/unit/api/test_error_handlers.py`
+- Create `cpms/src/cpms/contracts/errors.py`
+- Create `cpms/src/cpms/api/errors.py`
+- Modify `cpms/src/cpms/main.py`
+- Create `cpms/src/cpms/contracts/fixtures/errors/provider_authentication_failed.json`
+- Create `cpms/src/cpms/contracts/jsonschema/common_error.schema.json`
+- Create `cpms/tests/contract/test_error_contract.py`
+- Create `cpms/tests/unit/api/test_error_handlers.py`
 
-**Interfaces:**
-- Produces: `class CommonError(BaseModel)` per design §11; `class ApiErrorResponse(BaseModel)` with `error: CommonError`, `correlation_id: UUID`
-- Maps validation → `INVALID_REQUEST`; unknown routes → stable not-found envelope
+**Stable mappings:** validation 422 `INVALID_REQUEST`; not found 404 `NOT_FOUND`; conflict 409 `CONFLICT`; unsupported capability 422 `CAPABILITY_UNSUPPORTED`; provider error 502 `PROVIDER_ERROR`; timeout 504 `OPERATION_TIMEOUT`; unexpected error 500 `INTERNAL_ERROR`.
 
-- [ ] **Step 1: Failing fixture + handler tests**
+- [ ] **Step 1: Write failing model and API tests**
+
+`test_error_contract.py`:
 
 ```python
-def test_auth_error_fixture_has_no_secrets():
-    raw = json.loads(Path("src/cpms/contracts/fixtures/errors/provider_authentication_failed.json").read_text())
-    err = CommonError.model_validate(raw)
-    assert err.code == "PROVIDER_AUTHENTICATION_FAILED"
-    assert err.retryable is False
-    assert "token" not in json.dumps(raw).lower() or "[REDACTED]" in json.dumps(raw)
+def test_authentication_error_fixture_is_safe() -> None:
+    path = Path("src/cpms/contracts/fixtures/errors/provider_authentication_failed.json")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    error = CommonError.model_validate(raw)
+    assert error.code == "PROVIDER_AUTHENTICATION_FAILED"
+    assert error.retryable is False
+    assert not ({"password", "token", "authorization"} & set(error.details))
 ```
 
-- [ ] **Step 2: Run — FAIL missing module**
-
-- [ ] **Step 3: Implement models + FastAPI handlers returning correlation ID**
-
-- [ ] **Step 4: Refresh checksum; pytest contract+unit → PASS**
-
-Commit: `feat(CPMS-102): add common error and API response envelopes`
-
----
-
-### Task 4: CPMS-103 — Initial migration and unit of work
-
-**Files:**
-- Create: `src/cpms/infrastructure/db/base.py`, `models/provider.py`, `models/credential.py`, `models/connection.py`, `models/operation.py`, `models/messaging.py`
-- Create: `src/cpms/infrastructure/db/unit_of_work.py`
-- Create: `alembic/versions/20260731_0001_sprint1_core.py`
-- Test: `tests/integration/test_migrations.py`, `tests/integration/test_unit_of_work.py`
-
-**Interfaces:**
-- Produces: async `UnitOfWork` with `session`, `commit()`, `rollback()`
-- Tables (minimum columns):
-  - `providers(id UUID PK, name, type, description, status, created_at, updated_at)`
-  - `credentials(id UUID PK, key_version, ciphertext, created_at, updated_at, version)`
-  - `provider_connections(id UUID PK, provider_id FK, credential_id FK, scope JSONB, status, capabilities JSONB, version, ...)`
-  - `operations(id UUID PK, type, target_type, target_id, state, progress, request_safe JSONB, result_safe JSONB, error JSONB, provider_connection_id, idempotency_key, correlation_id, deadline_at, version, ...)`
-  - `operation_events(id UUID PK, operation_id FK, sequence INT, old_state, new_state, details JSONB, message_id, created_at)` UNIQUE `(operation_id, sequence)`
-  - `outbox_messages(id UUID PK, aggregate_type, aggregate_id, message_type, routing_key, payload JSONB, state, attempts, available_at, published_at, ...)`
-  - `inbox_messages(id UUID PK, consumer_name, message_id, message_type, payload JSONB, state, error, received_at, processed_at)` UNIQUE `(consumer_name, message_id)`
-
-- [ ] **Step 1: Failing migration test**
+`test_error_handlers.py`:
 
 ```python
-@pytest.mark.integration
-def test_alembic_upgrade_creates_operations_table():
-    # run alembic upgrade head against Compose DB
-    # assert information_schema has 'operations', 'outbox_messages', 'inbox_messages'
+@pytest.mark.parametrize(
+    ("exc", "status_code", "code"),
+    (
+        (ResourceNotFoundError("missing"), 404, "NOT_FOUND"),
+        (DomainConflictError("conflict"), 409, "CONFLICT"),
+        (CapabilityUnsupportedError("unsupported"), 422, "CAPABILITY_UNSUPPORTED"),
+        (ProviderOperationError("provider failed"), 502, "PROVIDER_ERROR"),
+        (OperationTimeoutError("timed out"), 504, "OPERATION_TIMEOUT"),
+    ),
+)
+def test_domain_errors_use_common_envelope(exc: Exception, status_code: int, code: str) -> None:
+    app = create_app(Settings(environment="test", _env_file=None))
+
+    @app.get("/_test/error")
+    async def raise_error() -> None:
+        raise exc
+
+    response = TestClient(app, raise_server_exceptions=False).get("/_test/error")
+    assert response.status_code == status_code
+    assert response.json()["error"]["code"] == code
+    assert response.headers["x-correlation-id"]
+
+
+def test_validation_and_internal_errors_use_common_envelope() -> None:
+    app = create_app(Settings(environment="test", _env_file=None))
+
+    @app.get("/_test/validation")
+    async def validation(value: int) -> dict[str, int]:
+        return {"value": value}
+
+    @app.get("/_test/internal")
+    async def internal() -> None:
+        raise RuntimeError("unsafe internal detail")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    invalid = client.get("/_test/validation")
+    internal_response = client.get("/_test/internal")
+    assert (invalid.status_code, invalid.json()["error"]["code"]) == (422, "INVALID_REQUEST")
+    assert (internal_response.status_code, internal_response.json()["error"]["code"]) == (500, "INTERNAL_ERROR")
+    assert "unsafe internal detail" not in internal_response.text
 ```
 
-- [ ] **Step 2: Run with `CPMS_RUN_INTEGRATION=1` — FAIL missing revision**
-
-- [ ] **Step 3: Write models + Alembic revision; upgrade empty DB**
-
-Run: `py -3.12 -m uv run alembic upgrade head`  
-Expected: creates tables/indexes/constraints on PostgreSQL 18.
-
-- [ ] **Step 4: UoW rollback test passes**
-
-Commit: `feat(CPMS-103): add sprint1 core schema migration and unit of work`
-
----
-
-### Task 5: CPMS-104 — Operation state machine and history
-
-**Files:**
-- Create: `src/cpms/domain/operations/states.py`
-- Create: `src/cpms/domain/operations/service.py`
-- Create: `src/cpms/infrastructure/db/repositories/operations.py`
-- Test: `tests/unit/domain/test_operation_transitions.py`, `tests/integration/test_operation_events.py`
-
-**Interfaces:**
-- Produces:
-```python
-class OperationState(StrEnum):
-    ACCEPTED = "ACCEPTED"
-    QUEUED = "QUEUED"
-    RUNNING = "RUNNING"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    TIMED_OUT = "TIMED_OUT"
-    CANCELLED = "CANCELLED"  # reserved; no public cancel API
-
-ALLOWED: dict[OperationState, set[OperationState]] = {...}  # per design §9
-
-class OperationService:
-    async def transition(self, operation_id: UUID, new_state: OperationState, *, details: dict, message_id: UUID | None, actor_context: dict | None) -> Operation
-```
-
-- [ ] **Step 1: Failing unit tests for illegal transitions and terminal immutability**
-
-```python
-def test_succeeded_cannot_transition_to_running():
-    assert OperationState.RUNNING not in ALLOWED[OperationState.SUCCEEDED]
-
-def test_transition_appends_ordered_event():
-    # arrange operation ACCEPTED
-    # act transition QUEUED then RUNNING
-    # assert events sequences 1,2 and states match
-```
-
-- [ ] **Step 2: FAIL — missing service**
-
-- [ ] **Step 3: Implement transition guard + event append in same UoW; optimistic version conflict → domain error**
-
-- [ ] **Step 4: Integration test concurrent update → one wins, one conflict**
-
-Commit: `feat(CPMS-104): enforce operation state machine and event history`
-
----
-
-### Task 6: CPMS-105 — Idempotent operation creation
-
-**Files:**
-- Modify: `src/cpms/domain/operations/service.py`
-- Modify: migration if unique index not already present: `uq_operations_connection_type_idempotency`
-- Test: `tests/integration/test_operation_idempotency.py`
-
-**Interfaces:**
-- Produces: `async def create_operation(..., idempotency_key: str, request_safe: dict) -> tuple[Operation, created: bool]`
-- Same key + semantic equality → return existing; same key + different request → `IdempotencyKeyReusedError` (HTTP 409 later)
-
-- [ ] **Step 1: Failing integration tests (duplicate same, duplicate different, concurrent)**
-
-- [ ] **Step 2: FAIL**
-
-- [ ] **Step 3: Implement with DB uniqueness + request hash/canonical JSON compare**
-
-- [ ] **Step 4: PASS under concurrent `asyncio.gather` creates**
-
-Commit: `feat(CPMS-105): add idempotent operation creation`
-
----
-
-### Task 7: CPMS-106 — Outbox publisher and inbox consumer skeleton
-
-**Files:**
-- Create: `src/cpms/infrastructure/messaging/topology.py`
-- Create: `src/cpms/infrastructure/messaging/outbox.py`
-- Create: `src/cpms/infrastructure/messaging/inbox.py`
-- Modify: `src/cpms/messaging/runtime.py` to run publisher loop (not just connect)
-- Test: `tests/integration/test_outbox_inbox.py`
-
-**Interfaces:**
-- Produces:
-```python
-async def enqueue_outbox(uow, *, message_type: str, routing_key: str, envelope: MessageEnvelope) -> None
-async def publish_pending(batch_size: int = 50) -> int  # confirm then mark published
-async def process_inbox(consumer_name: str, envelope: MessageEnvelope, handler) -> None
-```
-- Topology: declare exchanges/queues/bindings from design §10; durable + DLX.
-
-- [ ] **Step 1: Failing tests**
-  - operation create + outbox same transaction; rollback removes both
-  - publisher marks published only after confirm
-  - inbox duplicate `message_id` does not re-run handler
-
-- [ ] **Step 2: FAIL**
-
-- [ ] **Step 3: Implement with `FOR UPDATE SKIP LOCKED`, aio-pika confirms, manual ack after DB commit on inbox**
-
-- [ ] **Step 4: Integration against Compose RabbitMQ + Postgres → PASS**
-
-Commit: `feat(CPMS-106): add transactional outbox publisher and inbox consumer`
-
----
-
-### Task 8: OSPS-102 — RabbitMQ topology and robust runtime
-
-**Files:**
-- Create: `src/osps/messaging/topology.py`
-- Create: `src/osps/messaging/connection.py`
-- Create: `src/osps/messaging/consumer.py`
-- Create: `src/osps/messaging/publisher.py`
-- Modify: `src/osps/messaging/runtime.py`, `src/osps/messaging/lifecycle.py`
-- Test: `tests/integration/test_rabbitmq_runtime.py`
-
-**Interfaces:**
-- Produces: `async def declare_topology(channel) -> None`; `class RobustConsumer`; publisher `await publish_event(envelope, routing_key)` with confirm before return
-- Prefetch bounded (default 10); reconnect restores consumer; shutdown stops intake then drain/nack
-
-- [ ] **Step 1: Failing integration tests for declare idempotency, confirm, nack→DLQ path**
-
-- [ ] **Step 2: FAIL**
-
-- [ ] **Step 3: Implement; wire into `run_worker` long-running loop**
-
-- [ ] **Step 4: PASS with Compose RabbitMQ**
-
-Commit: `feat(OSPS-102): add durable RabbitMQ topology and robust runtime`
-
----
-
-### Task 9: OSPS-103 — Error normalization and retry policy
-
-**Files:**
-- Create: `src/osps/openstack/errors.py`
-- Create: `src/osps/openstack/retry.py`
-- Test: `tests/unit/openstack/test_error_normalization.py`, `tests/unit/openstack/test_retry_policy.py`
-- Pin: copy CPMS error fixtures if needed
-
-**Interfaces:**
-- Produces:
-```python
-def normalize_openstack_exception(exc: BaseException, *, service: str | None) -> CommonError
-def classify_retry(error: CommonError) -> RetryDecision  # retryable, backoff, respect Retry-After
-```
-- Map SDK auth/forbidden/not-found/conflict/quota/rate-limit/timeout/network/5xx per design §11
-- Never attach raw response body; keep `provider_request_id` when present
-
-- [ ] **Step 1: Failing parametrized tests for each exception class → code/retryable**
-
-- [ ] **Step 2: FAIL**
-
-- [ ] **Step 3: Implement mapping using `openstack.exceptions` hierarchy (import only; no live cloud)**
-
-- [ ] **Step 4: PASS**
-
-Commit: `feat(OSPS-103): normalize OpenStack errors and retry classification`
-
----
-
-### Task 10: OSPS-104 — Handler dispatch and envelope validation
-
-**Files:**
-- Create: `src/osps/application/dispatch.py`
-- Create: `src/osps/application/handlers/base.py`
-- Create: `src/osps/application/handlers/noop.py`
-- Modify: consumer to call dispatcher before ack
-- Test: `tests/unit/application/test_dispatch.py`, `tests/integration/test_command_dispatch.py`
-
-**Interfaces:**
-- Produces:
-```python
-class Handler(Protocol):
-    async def handle(self, envelope: MessageEnvelope) -> MessageEnvelope | None  # optional event
-
-class Dispatcher:
-    def register(self, message_type: str, handler: Handler) -> None
-    async def dispatch(self, raw: bytes) -> None  # validate → route → publish result events
-```
-- Malformed/unsupported major version → nack to DLQ without handler invocation
-- Progress/result must set causation/correlation/operation IDs from command
-
-- [ ] **Step 1: Failing tests — malformed envelope never calls handler; happy path noop publishes completed event fixture shape**
-
-- [ ] **Step 2: FAIL**
-
-- [ ] **Step 3: Implement validation-first dispatch**
-
-- [ ] **Step 4: Integration round-trip with CPMS golden command fixture → PASS**
-
-Commit: `feat(OSPS-104): add envelope validation and handler dispatch`
-
----
-
-### Task 11: Sprint verification and demo
-
-- [ ] **Step 1: Full CPMS DoD**
+- [ ] **Step 2: Verify RED**
 
 ```powershell
-cd c:\work\Cloud\project\CMP\src\cpms
+py -3.12 -m uv run pytest tests/contract/test_error_contract.py tests/unit/api/test_error_handlers.py -q
+```
+
+Expected: missing error modules/classes.
+
+- [ ] **Step 3: Implement the error model and exception types**
+
+```python
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ErrorCategory(StrEnum):
+    VALIDATION = "VALIDATION"
+    NOT_FOUND = "NOT_FOUND"
+    CONFLICT = "CONFLICT"
+    CAPABILITY = "CAPABILITY"
+    AUTHENTICATION = "AUTHENTICATION"
+    AUTHORIZATION = "AUTHORIZATION"
+    QUOTA = "QUOTA"
+    RATE_LIMIT = "RATE_LIMIT"
+    TIMEOUT = "TIMEOUT"
+    NETWORK = "NETWORK"
+    PROVIDER = "PROVIDER"
+    INTERNAL = "INTERNAL"
+
+
+class CommonError(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    code: str
+    message: str
+    category: ErrorCategory
+    retryable: bool
+    provider: str | None = None
+    provider_service: str | None = None
+    provider_request_id: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class DomainError(Exception):
+    status_code = 500
+    code = "INTERNAL_ERROR"
+    category = ErrorCategory.INTERNAL
+    retryable = False
+
+
+class ResourceNotFoundError(DomainError):
+    status_code, code, category = 404, "NOT_FOUND", ErrorCategory.NOT_FOUND
+
+
+class DomainConflictError(DomainError):
+    status_code, code, category = 409, "CONFLICT", ErrorCategory.CONFLICT
+
+
+class CapabilityUnsupportedError(DomainError):
+    status_code, code, category = 422, "CAPABILITY_UNSUPPORTED", ErrorCategory.CAPABILITY
+
+
+class ProviderOperationError(DomainError):
+    status_code, code, category = 502, "PROVIDER_ERROR", ErrorCategory.PROVIDER
+
+
+class OperationTimeoutError(DomainError):
+    status_code, code, category = 504, "OPERATION_TIMEOUT", ErrorCategory.TIMEOUT
+    retryable = True
+```
+
+- [ ] **Step 4: Implement FastAPI handlers and register them**
+
+```python
+from uuid import uuid4
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+from cpms.contracts.errors import CommonError, DomainError, ErrorCategory
+
+
+def _response(request: Request, error: CommonError, status_code: int) -> JSONResponse:
+    correlation_id = getattr(request.state, "correlation_id", str(uuid4()))
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": error.model_dump(mode="json"), "correlation_id": correlation_id},
+        headers={"x-correlation-id": correlation_id},
+    )
+
+
+def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(RequestValidationError)
+    async def validation_handler(request: Request, _exc: RequestValidationError) -> JSONResponse:
+        error = CommonError(
+            code="INVALID_REQUEST",
+            message="Request validation failed",
+            category=ErrorCategory.VALIDATION,
+            retryable=False,
+        )
+        return _response(request, error, 422)
+
+    @app.exception_handler(DomainError)
+    async def domain_handler(request: Request, exc: DomainError) -> JSONResponse:
+        error = CommonError(
+            code=exc.code,
+            message=str(exc),
+            category=exc.category,
+            retryable=exc.retryable,
+        )
+        return _response(request, error, exc.status_code)
+
+    @app.exception_handler(Exception)
+    async def unexpected_handler(request: Request, _exc: Exception) -> JSONResponse:
+        error = CommonError(
+            code="INTERNAL_ERROR",
+            message="Internal service error",
+            category=ErrorCategory.INTERNAL,
+            retryable=False,
+        )
+        return _response(request, error, 500)
+```
+
+Register it in `create_app()` after middleware and before returning the app:
+
+```python
+register_error_handlers(app)
+```
+
+- [ ] **Step 5: Export schema, create fixture, refresh manifest, and verify GREEN**
+
+```powershell
+py -3.12 -m uv run python -c "import json; from pathlib import Path; from cpms.contracts.errors import CommonError; p=Path('src/cpms/contracts/jsonschema/common_error.schema.json'); p.write_text(json.dumps(CommonError.model_json_schema(),indent=2)+chr(10),encoding='utf-8')"
+py -3.12 -m uv run python -m cpms.contracts.write_manifest
+py -3.12 -m uv run pytest tests/contract/test_error_contract.py tests/unit/api/test_error_handlers.py -q
+```
+
+Create the authentication fixture from the `operation_failed` payload error in Task 1. Expected: all mappings pass and the manifest includes the error fixture and schema.
+
+- [ ] **Step 6: Commit**
+
+```powershell
+rtk git add src tests pyproject.toml uv.lock
+rtk git commit -m "feat(CPMS-102): add common error contract and API mappings"
+```
+
+---
+
+### Task 3: OSPS-101 byte-for-byte contract pin and standalone CI guard
+
+**Files:**
+- Copy CPMS contract assets to `osps/src/osps/contracts/`
+- Copy `cpms/src/cpms/contracts/errors.py` to `osps/src/osps/contracts/errors.py`
+- Create `osps/src/osps/contracts/cpms_checksums.pinned.json`
+- Modify `osps/src/osps/contracts/validate.py`
+- Create `osps/tests/contract/test_pin_against_cpms.py`
+- Modify `osps/.github/workflows/ci.yml`
+
+- [ ] **Step 1: Write the failing pin test**
+
+```python
+from pathlib import Path
+
+from osps.contracts.validate import assert_matches_cpms_canonical
+
+
+def test_local_contract_tree_matches_pinned_cpms_manifest() -> None:
+    contracts = Path("src/osps/contracts")
+    assert_matches_cpms_canonical(
+        contracts / "cpms_checksums.pinned.json",
+        osps_root=contracts,
+    )
+```
+
+- [ ] **Step 2: Verify RED**
+
+```powershell
+py -3.12 -m uv run pytest tests/contract/test_pin_against_cpms.py -q
+```
+
+Expected: missing pinned manifest or helper.
+
+- [ ] **Step 3: Implement the comparison helper**
+
+```python
+def assert_matches_cpms_canonical(
+    cpms_checksums: Path,
+    *,
+    osps_root: Path | None = None,
+) -> None:
+    base = osps_root or CONTRACTS_ROOT
+    local_manifest = base / "checksums.json"
+    if not cpms_checksums.is_file():
+        raise AssertionError(f"missing pinned CPMS manifest: {cpms_checksums}")
+    if not local_manifest.is_file():
+        raise AssertionError(f"missing OSPS manifest: {local_manifest}")
+    if local_manifest.read_bytes() != cpms_checksums.read_bytes():
+        raise AssertionError("OSPS manifest differs from pinned CPMS manifest")
+    result = validate_contract_tree(base)
+    if not result.ok:
+        raise AssertionError(result.message)
+```
+
+- [ ] **Step 4: Copy contracts from the workspace root and create the immutable pin**
+
+```powershell
+cd C:\work\Cloud\project\CMP\src
+$source = "cpms\src\cpms\contracts"
+$target = "osps\src\osps\contracts"
+Copy-Item "$source\checksums.json" "$target\checksums.json" -Force
+Copy-Item "$source\checksums.json" "$target\cpms_checksums.pinned.json" -Force
+Copy-Item "$source\errors.py" "$target\errors.py" -Force
+robocopy "$source\fixtures" "$target\fixtures" /MIR
+if ($LASTEXITCODE -gt 7) { throw "robocopy fixtures failed: $LASTEXITCODE" }
+robocopy "$source\jsonschema" "$target\jsonschema" /MIR
+if ($LASTEXITCODE -gt 7) { throw "robocopy jsonschema failed: $LASTEXITCODE" }
+```
+
+- [ ] **Step 5: Add the standalone CI guard**
+
+After local contract validation in OSPS CI, add:
+
+```yaml
+- name: Verify CPMS contract pin
+  run: >-
+    uv run python -c "from pathlib import Path;
+    from osps.contracts.validate import assert_matches_cpms_canonical;
+    p=Path('src/osps/contracts');
+    assert_matches_cpms_canonical(p/'cpms_checksums.pinned.json', osps_root=p)"
+```
+
+This contains no machine-specific path. Updating `cpms_checksums.pinned.json` is allowed only in the same reviewed change that copies a new canonical CPMS manifest.
+
+- [ ] **Step 6: Verify GREEN and commit**
+
+```powershell
+cd C:\work\Cloud\project\CMP\src\osps
+py -3.12 -m uv run python -m osps.contracts.validate_contracts
+py -3.12 -m uv run pytest tests/contract -q
+rtk git add src/osps/contracts tests/contract .github/workflows/ci.yml
+rtk git commit -m "feat(OSPS-101): pin canonical CPMS contracts"
+```
+
+Expected: local tree validates and its manifest bytes equal the pinned canonical snapshot.
+
+---
+
+### Task 4: OSPS-103 OpenStack error normalization and retry decisions
+
+**Files:**
+- Create `osps/src/osps/openstack/__init__.py`
+- Create `osps/src/osps/openstack/errors.py`
+- Create `osps/src/osps/openstack/retry.py`
+- Create `osps/tests/unit/openstack/test_error_normalization.py`
+- Create `osps/tests/unit/openstack/test_retry_policy.py`
+
+**Interfaces:**
+
+Produces `RetryDecision`, `normalize_openstack_exception()`, and `classify_retry()`.
+Their complete implementations are in Steps 4 and 5.
+
+`RetryDecision` deliberately does not select RabbitMQ ack/requeue/DLQ. That belongs to OSPS-102/104 in Sprint 1B, where retry publishing and attempt headers can be implemented atomically with acknowledgement policy.
+
+- [ ] **Step 1: Write failing normalization tests**
+
+```python
+@pytest.mark.parametrize(
+    ("exc", "code", "category", "retryable"),
+    (
+        (os_exc.HttpException("auth", http_status=401), "PROVIDER_AUTHENTICATION_FAILED", "AUTHENTICATION", False),
+        (os_exc.ForbiddenException("forbidden"), "PROVIDER_FORBIDDEN", "AUTHORIZATION", False),
+        (os_exc.ResourceNotFound("missing"), "PROVIDER_RESOURCE_NOT_FOUND", "NOT_FOUND", False),
+        (os_exc.ConflictException("conflict"), "PROVIDER_CONFLICT", "CONFLICT", False),
+        (os_exc.HttpException("limited", http_status=429), "PROVIDER_RATE_LIMITED", "RATE_LIMIT", True),
+        (os_exc.HttpException("unavailable", http_status=503), "PROVIDER_UNAVAILABLE", "PROVIDER", True),
+        (TimeoutError("timeout"), "PROVIDER_TIMEOUT", "TIMEOUT", True),
+        (ConnectionError("network"), "PROVIDER_NETWORK_ERROR", "NETWORK", True),
+    ),
+)
+def test_normalization(exc, code: str, category: str, retryable: bool) -> None:
+    error = normalize_openstack_exception(exc, service="compute")
+    assert (error.code, error.category.value, error.retryable) == (code, category, retryable)
+    assert error.provider == "OPENSTACK"
+    assert error.provider_service == "compute"
+    assert "response" not in error.details
+```
+
+Add a separate fake exception with `request_id = "req-safe"` and `response.text = "secret-body"`; assert request ID is retained and `secret-body` is absent from `model_dump_json()`.
+
+- [ ] **Step 2: Write failing deterministic retry tests**
+
+```python
+def test_retry_uses_retry_after_when_present() -> None:
+    error = CommonError(code="PROVIDER_RATE_LIMITED", message="limited", category="RATE_LIMIT", retryable=True)
+    decision = classify_retry(error, attempt=1, retry_after=17.0)
+    assert decision == RetryDecision(retryable=True, exhausted=False, delay_seconds=17.0)
+
+
+def test_retry_uses_exponential_backoff_and_jitter() -> None:
+    error = CommonError(code="PROVIDER_TIMEOUT", message="timeout", category="TIMEOUT", retryable=True)
+    decision = classify_retry(error, attempt=3, random_unit=0.5)
+    assert decision.delay_seconds == 5.0  # base 1 * 2**2 + jitter in [0,2]
+
+
+def test_non_retryable_and_exhausted_have_no_delay() -> None:
+    fatal = CommonError(code="PROVIDER_FORBIDDEN", message="forbidden", category="AUTHORIZATION", retryable=False)
+    transient = CommonError(code="PROVIDER_TIMEOUT", message="timeout", category="TIMEOUT", retryable=True)
+    assert classify_retry(fatal, attempt=1) == RetryDecision(False, False, None)
+    assert classify_retry(transient, attempt=5, max_attempts=5) == RetryDecision(False, True, None)
+```
+
+- [ ] **Step 3: Verify RED**
+
+```powershell
+py -3.12 -m uv run pytest tests/unit/openstack/test_error_normalization.py tests/unit/openstack/test_retry_policy.py -q
+```
+
+Expected: missing OSPS OpenStack error modules.
+
+- [ ] **Step 4: Implement normalization**
+
+```python
+from __future__ import annotations
+
+from openstack import exceptions as os_exc
+
+from osps.contracts.errors import CommonError, ErrorCategory
+
+
+def _request_id(exc: BaseException) -> str | None:
+    direct = getattr(exc, "request_id", None)
+    if isinstance(direct, str) and direct:
+        return direct
+    many = getattr(exc, "request_ids", None)
+    if isinstance(many, (list, tuple)) and many and isinstance(many[0], str):
+        return many[0]
+    return None
+
+
+def normalize_openstack_exception(
+    exc: BaseException,
+    *,
+    service: str | None = None,
+) -> CommonError:
+    status = getattr(exc, "http_status", None)
+    if status == 401:
+        code, category, retryable = "PROVIDER_AUTHENTICATION_FAILED", ErrorCategory.AUTHENTICATION, False
+    elif status == 403 or isinstance(exc, os_exc.ForbiddenException):
+        code, category, retryable = "PROVIDER_FORBIDDEN", ErrorCategory.AUTHORIZATION, False
+    elif status == 404 or isinstance(exc, (os_exc.ResourceNotFound, os_exc.NotFoundException)):
+        code, category, retryable = "PROVIDER_RESOURCE_NOT_FOUND", ErrorCategory.NOT_FOUND, False
+    elif status == 409 or isinstance(exc, os_exc.ConflictException):
+        code, category, retryable = "PROVIDER_CONFLICT", ErrorCategory.CONFLICT, False
+    elif status == 429:
+        code, category, retryable = "PROVIDER_RATE_LIMITED", ErrorCategory.RATE_LIMIT, True
+    elif isinstance(status, int) and 500 <= status <= 599:
+        code, category, retryable = "PROVIDER_UNAVAILABLE", ErrorCategory.PROVIDER, True
+    elif isinstance(exc, (TimeoutError, os_exc.ResourceTimeout)):
+        code, category, retryable = "PROVIDER_TIMEOUT", ErrorCategory.TIMEOUT, True
+    elif isinstance(exc, ConnectionError):
+        code, category, retryable = "PROVIDER_NETWORK_ERROR", ErrorCategory.NETWORK, True
+    else:
+        code, category, retryable = "PROVIDER_INTERNAL_ERROR", ErrorCategory.PROVIDER, False
+    return CommonError(
+        code=code,
+        message="OpenStack provider request failed",
+        category=category,
+        retryable=retryable,
+        provider="OPENSTACK",
+        provider_service=service,
+        provider_request_id=_request_id(exc),
+        details={},
+    )
+```
+
+- [ ] **Step 5: Implement deterministic retry calculation**
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class RetryDecision:
+    retryable: bool
+    exhausted: bool
+    delay_seconds: float | None
+
+
+def classify_retry(
+    error: CommonError,
+    *,
+    attempt: int,
+    max_attempts: int = 5,
+    retry_after: float | None = None,
+    random_unit: float = 0.5,
+) -> RetryDecision:
+    if attempt < 1 or max_attempts < 1 or not 0.0 <= random_unit <= 1.0:
+        raise ValueError("invalid retry parameters")
+    if not error.retryable:
+        return RetryDecision(False, False, None)
+    if attempt >= max_attempts:
+        return RetryDecision(False, True, None)
+    if retry_after is not None:
+        return RetryDecision(True, False, max(0.0, retry_after))
+    exponential = min(60.0, float(2 ** (attempt - 1)))
+    jitter = exponential * 0.5 * random_unit
+    return RetryDecision(True, False, exponential + jitter)
+```
+
+- [ ] **Step 6: Verify GREEN and commit**
+
+```powershell
+py -3.12 -m uv run pytest tests/unit/openstack -q
+py -3.12 -m uv run ruff check src tests
+py -3.12 -m uv run mypy
+rtk git add src/osps/openstack tests/unit/openstack
+rtk git commit -m "feat(OSPS-103): normalize OpenStack errors and classify retries"
+```
+
+---
+
+### Task 5: Sprint 1A verification and evidence
+
+- [ ] **Step 1: Verify CPMS**
+
+```powershell
+cd C:\work\Cloud\project\CMP\src\cpms
 py -3.12 -m uv sync --frozen --all-extras
 py -3.12 -m uv run ruff format --check src tests
 py -3.12 -m uv run ruff check src tests
 py -3.12 -m uv run mypy
-$env:CPMS_RUN_INTEGRATION="1"
 py -3.12 -m uv run pytest -q
-py -3.12 -m uv run alembic upgrade head
 py -3.12 -m uv run python -m cpms.contracts.validate_contracts
 py -3.12 -m uv run python -m detect_secrets scan --baseline .secrets.baseline --exclude-files "(?i)(.*\.venv/.*|.*uv\.lock$|.*\.git/.*)"
 rtk git diff --check
-rtk docker build -t cpms:sprint1 .
+rtk docker build -t cpms:sprint1a .
 ```
 
-Expected: all green; fixtures validate; migration clean on empty DB.
+- [ ] **Step 2: Verify OSPS**
 
-- [ ] **Step 2: Full OSPS DoD** (same pattern with `OSPS_RUN_INTEGRATION=1`; no alembic)
+```powershell
+cd C:\work\Cloud\project\CMP\src\osps
+py -3.12 -m uv sync --frozen --all-extras
+py -3.12 -m uv run ruff format --check src tests
+py -3.12 -m uv run ruff check src tests
+py -3.12 -m uv run mypy
+py -3.12 -m uv run pytest -q
+py -3.12 -m uv run python -m osps.contracts.validate_contracts
+py -3.12 -m uv run python -c "from pathlib import Path; from osps.contracts.validate import assert_matches_cpms_canonical; p=Path('src/osps/contracts'); assert_matches_cpms_canonical(p/'cpms_checksums.pinned.json', osps_root=p)"
+py -3.12 -m uv run python -m detect_secrets scan --baseline .secrets.baseline --exclude-files "(?i)(.*\.venv/.*|.*uv\.lock$|.*\.git/.*)"
+rtk git diff --check
+rtk docker build -t osps:sprint1a .
+```
 
-- [ ] **Step 3: Demo scenario (local Compose; optional real OpenStack only for connectivity smoke if available—not required for Sprint 1 exit)**
-  1. Start Compose postgres/rabbitmq.
-  2. Run CPMS API + worker; run OSPS worker.
-  3. Insert/create a synthetic operation that enqueues `openstack.connection.validate` outbox message (test harness or temporary internal call).
-  4. Observe OSPS consume, validate envelope, dispatch noop, publish `cloud.operation.completed` (or progress) event.
-  5. Observe CPMS inbox dedupe on redelivery.
-  6. Confirm logs/fixtures contain no secrets.
+- [ ] **Step 3: Update evidence and commit documentation**
 
-- [ ] **Step 4: Update `plan/sprints/sprint-1.md` evidence in both repos; commit docs**
+Update both `plan/sprints/sprint-1.md` files with exact test counts, contract manifest SHA-256, known limitations, and retrospective. Commit in each repository using `docs: record Sprint 1A evidence`.
 
----
+## Commit Boundaries
 
-## Commit boundary summary
-
-| Order | Commit | Repo |
-|---|---|---|
-| 1 | CPMS-101 fixtures+envelope | cpms |
-| 2 | OSPS-101 pin | osps |
-| 3 | CPMS-102 errors | cpms |
-| 4 | CPMS-103 migration/UoW | cpms |
-| 5 | CPMS-104 state machine | cpms |
-| 6 | CPMS-105 idempotency | cpms |
-| 7 | CPMS-106 outbox/inbox | cpms |
-| 8 | OSPS-102 RabbitMQ runtime | osps |
-| 9 | OSPS-103 errors/retry | osps |
-| 10 | OSPS-104 dispatch | osps |
-| 11 | Sprint evidence | both |
+1. CPMS Task 0 manifest algorithm.
+2. OSPS Task 0 manifest algorithm.
+3. CPMS-101 canonical contracts.
+4. CPMS-102 common errors and API mappings.
+5. OSPS-101 pinned contracts.
+6. OSPS-103 error normalization/retry classification.
+7. Evidence commit in each repository.
 
 ## Self-review
 
-**1. Spec coverage**
-- Design §10 envelope/topology/outbox/inbox → Tasks 1,7,8,10
-- Design §11 errors/retry → Tasks 3,9
-- Design §9 operations/events → Tasks 5,6
-- Design §14 core tables (non-inventory) → Task 4
-- Backlog CPMS-101..106 / OSPS-101..104 → all mapped
-- Explicitly out of scope: provider CRUD, inventory tables, OpenStack mutations, Keycloak/TMS/LMS
-
-**2. Placeholder scan:** no TBD/TODO left in task steps; commands and expected results included.
-
-**3. Type consistency:** `MessageEnvelope`, `CommonError`, `OperationState`, `UnitOfWork`, `Dispatcher` names reused consistently across tasks.
-
-**4. CodeGraph note:** CMP workspace index currently surfaces ManageIQ/OpenStackSDK/BMS symbols, not CPMS/OSPS package sources. Discovery for implementation should use direct reads under `cpms/src` and `osps/src` until those trees are indexed.
+- Every committed 1A story is delivered completely; no story is split across 1A/1B.
+- Every fixture is validated by both Pydantic and exported JSON Schema.
+- OSPS standalone CI compares its live manifest with a pinned CPMS manifest and validates every pinned file.
+- CPMS-102 covers validation, not-found, conflict, capability, provider, timeout, and unexpected errors.
+- Retry classification is deterministic and does not pretend that RabbitMQ backoff exists before Sprint 1B.
+- No database, topology, consumer, ack/requeue/DLQ, or OpenStack request code is included.
+- Sprint 1B requires a new reviewed plan for CPMS-103..106 and OSPS-102/104.
