@@ -18,29 +18,31 @@ class ValidationResult:
     message: str = ""
 
 
-def validate_contract_tree(root: Path | None = None) -> ValidationResult:
-    """Validate fixture checksums when present; succeed when Sprint 0 tree is empty."""
-    base = root or CONTRACTS_ROOT
+def _compute_fixture_checksums(base: Path) -> dict[str, str]:
     fixtures_dir = base / "fixtures"
-    manifest_path = base / "checksums.json"
-
     if not fixtures_dir.exists():
-        fixtures_dir.mkdir(parents=True, exist_ok=True)
-
+        return {}
     fixture_files = sorted(
         path for path in fixtures_dir.rglob("*") if path.is_file() and path.name != ".gitkeep"
     )
-    computed = {
+    return {
         path.relative_to(base).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in fixture_files
     }
 
+
+def validate_contract_tree(root: Path | None = None) -> ValidationResult:
+    """Validate fixture checksums against a committed manifest (read-only)."""
+    base = root or CONTRACTS_ROOT
+    manifest_path = base / "checksums.json"
+    computed = _compute_fixture_checksums(base)
+
     if not manifest_path.exists():
-        manifest_path.write_text(
-            json.dumps({"fixtures": computed}, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        return ValidationResult(
+            ok=False,
+            fixture_count=len(computed),
+            message="missing checksums.json",
         )
-        return ValidationResult(ok=True, fixture_count=len(computed), message="manifest created")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected = manifest.get("fixtures", {})
@@ -51,6 +53,24 @@ def validate_contract_tree(root: Path | None = None) -> ValidationResult:
             message="contract checksum mismatch",
         )
     return ValidationResult(ok=True, fixture_count=len(computed))
+
+
+def write_contract_manifest(root: Path | None = None) -> ValidationResult:
+    """Create or refresh checksums.json from the current fixtures tree."""
+    base = root or CONTRACTS_ROOT
+    fixtures_dir = base / "fixtures"
+    fixtures_dir.mkdir(parents=True, exist_ok=True)
+    computed = _compute_fixture_checksums(base)
+    manifest_path = base / "checksums.json"
+    manifest_path.write_text(
+        json.dumps({"fixtures": computed}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return ValidationResult(
+        ok=True,
+        fixture_count=len(computed),
+        message="manifest written",
+    )
 
 
 def main() -> None:

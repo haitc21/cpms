@@ -14,7 +14,7 @@ pytestmark = pytest.mark.integration
 
 
 def _compose_available() -> bool:
-    return os.getenv("CPMS_RUN_INTEGRATION", "1") == "1"
+    return os.getenv("CPMS_RUN_INTEGRATION", "0") == "1"
 
 
 @pytest.mark.skipif(not _compose_available(), reason="integration disabled")

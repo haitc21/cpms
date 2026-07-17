@@ -6,9 +6,21 @@ import json
 import logging
 import sys
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TextIO
 
 from cpms.observability.redaction import redact_mapping, redact_text
+
+
+class ServiceNameFilter(logging.Filter):
+    """Attach a stable service name to every log record."""
+
+    def __init__(self, service_name: str) -> None:
+        super().__init__()
+        self._service_name = service_name
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.__dict__["service"] = self._service_name
+        return True
 
 
 class RedactingJsonFormatter(logging.Formatter):
@@ -59,11 +71,15 @@ class RedactingJsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def configure_logging(level: str = "INFO", service_name: str = "cpms") -> None:
+def configure_logging(
+    level: str = "INFO",
+    service_name: str = "cpms",
+    stream: TextIO | None = None,
+) -> None:
     root = logging.getLogger()
     root.handlers.clear()
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(stream or sys.stdout)
     handler.setFormatter(RedactingJsonFormatter())
+    handler.addFilter(ServiceNameFilter(service_name))
     root.addHandler(handler)
     root.setLevel(level.upper())
-    logging.LoggerAdapter(root, {"service": service_name})

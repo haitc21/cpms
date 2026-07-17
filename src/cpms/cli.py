@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from collections.abc import Sequence
 
@@ -19,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument(
         "--once",
         action="store_true",
-        help="Initialize worker dependencies once and exit (smoke mode)",
+        help="Connect once to RabbitMQ and exit (smoke mode)",
     )
     return parser
 
@@ -38,10 +39,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
 
     if args.command == "worker":
+        from cpms.config import get_settings
+        from cpms.messaging.lifecycle import WorkerLifecycle
+        from cpms.messaging.runtime import run_worker
+        from cpms.observability.logging import configure_logging
+
+        settings = get_settings()
+        configure_logging(level=settings.log_level, service_name=settings.service_name)
+        lifecycle = WorkerLifecycle()
+        asyncio.run(run_worker(settings=settings, lifecycle=lifecycle, once=args.once))
         if args.once:
             print("cpms worker initialized", flush=True)
-            return
-        print("cpms worker running", flush=True)
         return
 
     parser.error(f"unknown command: {args.command}")
