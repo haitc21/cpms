@@ -22,6 +22,7 @@
 - [x] Verify redaction, observability, and failure behavior.
 - [x] Update operational documentation for local start/health.
 - [x] Run the Definition of Done quality gates.
+- [x] Harden worker lifecycle, logging service_name, read-only contract validation, integration opt-out, and cancellation shutdown path.
 
 ## Story details
 
@@ -54,26 +55,30 @@
 | Risk/impediment | Owner | Mitigation | Status |
 |---|---|---|---|
 | Local Python alias points to Store stub | Agent | Use `py -3.12` / explicit 3.12 interpreter | Mitigated |
-| Sprint 1 migrations/contracts not present yet | Agent | Provide empty-safe migration/contract CI checks without domain scaffold | Open |
-| Compose services must remain running | Agent | Do not recreate volumes; use existing healthy stack | Open |
+| Sprint 1 migrations/contracts not present yet | Agent | Provide empty-safe migration/contract CI checks without domain scaffold | Mitigated |
+| Compose services must remain running | Agent | Do not recreate volumes; use existing healthy stack | Mitigated |
+| Windows Ctrl+C / task cancel skipped shutdown | Agent | `begin_shutdown()` in `finally` before closing RabbitMQ | Mitigated |
 
 ## Review evidence
 
-- Demo scenario: start CPMS API, call `/health/live` and `/health/ready` against local Compose.
-- Test/migration commands and results:
+- Demo scenario: start CPMS API, call `/health/live` and `/health/ready` against local Compose; `cpms worker` stays up and shuts down cleanly.
+- Final DoD (2026-07-17, branch `sprint-0`):
   - `uv sync --frozen --all-extras` — ok
   - `ruff format --check`, `ruff check`, `mypy` — ok
-  - `pytest -q` — 18 passed (unit + integration against Compose)
+  - `pytest -q` (default) — **22 passed, 1 skipped** (integration opt-out)
+  - `CPMS_RUN_INTEGRATION=1 pytest tests/integration` — **1 passed**
   - `alembic upgrade head` — ok (empty baseline)
-  - `python -m cpms.contracts.validate_contracts` — ok (0 fixtures)
+  - `python -m cpms.contracts.validate_contracts` — ok (0 fixtures; read-only)
   - `python -m detect_secrets scan --baseline .secrets.baseline ...` — ok
-  - `docker build -t cpms:sprint0 .` — ok (Python 3.12 image)
+  - `docker build -t cpms:sprint0 .` — ok
+  - `git diff --check` — clean
   - Compose postgres/rabbitmq/valkey remained healthy
+- Hardening commits: `e928569` (worker/logging/contracts/integration defaults + cancellation path)
 - Contract checksum: empty Sprint 0 manifest (`fixtures: {}`)
 - Known limitations: no provider/domain APIs; Alembic empty baseline only; Valkey unused by CPMS readiness.
 
 ## Retrospective actions
 
-- Keep: TDD per story with Compose-backed readiness proof.
-- Improve: prefer `python -m detect_secrets` over blocked console scripts on Windows.
-- One measurable action for next sprint: add domain migration and golden contract fixtures before provider APIs.
+- Keep: TDD per story; Compose-backed readiness; cancel-safe worker `finally`.
+- Improve: prefer `python -m detect_secrets`; integration tests opt-in locally.
+- One measurable action for next sprint: land CPMS-101 golden fixtures and checksums before any OSPS pin copy.
