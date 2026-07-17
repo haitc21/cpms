@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 
 import pytest
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import ValidationError
+from jsonschema.protocols import Validator
 
 from cpms.contracts.messages.envelope import MessageEnvelope, assert_supported_major
 
@@ -22,12 +24,16 @@ FIXTURE_PATHS = (
 )
 
 
+def _schema_validator() -> Validator:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
 @pytest.mark.parametrize("fixture_path", FIXTURE_PATHS, ids=lambda path: path.stem)
 def test_every_fixture_validates_with_pydantic_and_jsonschema(fixture_path: Path) -> None:
     raw = json.loads(fixture_path.read_text(encoding="utf-8"))
     MessageEnvelope.model_validate(raw)
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    Draft202012Validator(schema).validate(raw)
+    _schema_validator().validate(raw)
 
 
 @pytest.mark.parametrize("fixture_path", FIXTURE_PATHS)
@@ -54,3 +60,31 @@ def test_unknown_major_rejected_and_unknown_minor_field_accepted() -> None:
     raw = json.loads(FIXTURE_PATHS[0].read_text(encoding="utf-8"))
     raw["future_minor_field"] = {"safe": True}
     MessageEnvelope.model_validate(raw)
+
+
+def test_jsonschema_rejects_invalid_uuid() -> None:
+    raw = json.loads(FIXTURE_PATHS[0].read_text(encoding="utf-8"))
+    raw["message_id"] = "not-a-uuid"
+    with pytest.raises(ValidationError):
+        _schema_validator().validate(raw)
+
+
+def test_jsonschema_rejects_invalid_datetime() -> None:
+    raw = json.loads(FIXTURE_PATHS[0].read_text(encoding="utf-8"))
+    raw["occurred_at"] = "not-a-datetime"
+    with pytest.raises(ValidationError):
+        _schema_validator().validate(raw)
+
+
+def test_naive_occurred_at_rejected() -> None:
+    raw = json.loads(FIXTURE_PATHS[0].read_text(encoding="utf-8"))
+    raw["occurred_at"] = "2026-07-17T00:00:00"
+    with pytest.raises(ValueError, match="UTC"):
+        MessageEnvelope.model_validate(raw)
+
+
+def test_non_utc_offset_occurred_at_rejected() -> None:
+    raw = json.loads(FIXTURE_PATHS[0].read_text(encoding="utf-8"))
+    raw["occurred_at"] = "2026-07-17T00:00:00+07:00"
+    with pytest.raises(ValueError, match="UTC"):
+        MessageEnvelope.model_validate(raw)

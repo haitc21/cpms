@@ -44,11 +44,11 @@
 - **Acceptance:** liveness is process-only; readiness false when DB or RabbitMQ unavailable; Valkey is not a readiness dependency.
 - **Verification:** unit tests with fakes; integration tests against Compose PostgreSQL/RabbitMQ.
 
-### CPMS-004 — CI quality pipeline
+### CPMS-004 — Local quality pipeline
 
 - **Depends on:** CPMS-001..003
-- **Acceptance:** CI runs lock verification, formatting, lint, typing, unit tests, integration tests with PostgreSQL/RabbitMQ, migration check, contract validation, and secret scan.
-- **Verification:** GitHub Actions (or equivalent) workflow dry-run locally via the same commands.
+- **Acceptance:** Husky pre-commit runs formatting, lint, typing, default tests, contract validation, and secret scan. Infrastructure-backed integration and migration checks remain explicit developer/GitLab pipeline gates.
+- **Verification:** Install hooks with `npm install`, then run `.husky/pre-commit` from a Git-compatible shell.
 
 ## Risks and impediments
 

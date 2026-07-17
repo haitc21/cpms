@@ -117,6 +117,8 @@ Bug fixes require a regression test. Do not weaken assertions or delete tests to
 ## Git and completion discipline
 
 - Keep commits scoped to one story or coherent vertical slice.
+- AI agents must not stage, commit, amend, merge, rebase, or push unless the user explicitly requests that exact Git operation in the current turn. Authorization from an earlier turn does not carry forward.
+- A plan step named `Commit` means prepare a commit proposal and stop for approval; it does not authorize `git add` or `git commit`. Requests such as "continue", "finish", or "execute the plan" do not imply Git authorization.
 - Never reset, discard, or overwrite unrelated changes.
 - Do not commit secrets, generated caches, local data volumes, or test artifacts.
 - Before completion run the commands defined by the repository; until scaffolded, at minimum run `rtk git diff --check` and validate changed Markdown/YAML/Compose files.

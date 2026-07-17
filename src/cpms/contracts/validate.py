@@ -24,9 +24,7 @@ def _contract_files(base: Path) -> list[Path]:
         root = base / directory
         if root.exists():
             files.extend(
-                path
-                for path in root.rglob("*")
-                if path.is_file() and path.name != ".gitkeep"
+                path for path in root.rglob("*") if path.is_file() and path.name != ".gitkeep"
             )
     return sorted(files)
 

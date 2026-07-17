@@ -40,7 +40,7 @@
 - Modify `src/osps/contracts/validate.py`: same local manifest algorithm plus canonical-pin comparison.
 - Copy CPMS `fixtures/`, `jsonschema/`, and `checksums.json` into `src/osps/contracts/`.
 - Create `src/osps/contracts/cpms_checksums.pinned.json`: byte-for-byte CPMS manifest snapshot for standalone CI.
-- Modify `.github/workflows/ci.yml`: validate local tree and pinned manifest.
+- Modify `.husky/pre-commit`: validate the local tree and pinned manifest before a user-authorized commit.
 - Create `src/osps/openstack/errors.py`: SDK exception normalization.
 - Create `src/osps/openstack/retry.py`: deterministic retry decisions.
 - Create contract and unit tests listed below.
@@ -170,8 +170,8 @@ Expected: both contract suites pass and both manifests contain `{"files": {}}` b
 - [ ] **Step 5: Commit independently in both repos**
 
 ```powershell
-rtk git add src tests/contract
-rtk git commit -m "fix(contracts): checksum fixtures and jsonschema"
+Leave files unstaged and propose: `fix(contracts): checksum fixtures and jsonschema`.
+Wait for explicit current-turn authorization before staging or committing.
 ```
 
 ---
@@ -371,8 +371,8 @@ Expected: all five fixtures validate twice; the manifest lists six files or more
 - [ ] **Step 7: Commit**
 
 ```powershell
-rtk git add pyproject.toml uv.lock src/cpms/contracts tests/contract
-rtk git commit -m "feat(CPMS-101): add canonical message contracts"
+Leave files unstaged and propose: `feat(CPMS-101): add canonical message contracts`.
+Wait for explicit current-turn authorization before staging or committing.
 ```
 
 ---
@@ -595,13 +595,13 @@ Create the authentication fixture from the `operation_failed` payload error in T
 - [ ] **Step 6: Commit**
 
 ```powershell
-rtk git add src tests pyproject.toml uv.lock
-rtk git commit -m "feat(CPMS-102): add common error contract and API mappings"
+Leave files unstaged and propose: `feat(CPMS-102): add common error contract and API mappings`.
+Wait for explicit current-turn authorization before staging or committing.
 ```
 
 ---
 
-### Task 3: OSPS-101 byte-for-byte contract pin and standalone CI guard
+### Task 3: OSPS-101 byte-for-byte contract pin and standalone quality guard
 
 **Files:**
 - Copy CPMS contract assets to `osps/src/osps/contracts/`
@@ -609,7 +609,7 @@ rtk git commit -m "feat(CPMS-102): add common error contract and API mappings"
 - Create `osps/src/osps/contracts/cpms_checksums.pinned.json`
 - Modify `osps/src/osps/contracts/validate.py`
 - Create `osps/tests/contract/test_pin_against_cpms.py`
-- Modify `osps/.github/workflows/ci.yml`
+- Modify `osps/.husky/pre-commit`
 
 - [ ] **Step 1: Write the failing pin test**
 
@@ -671,9 +671,9 @@ robocopy "$source\jsonschema" "$target\jsonschema" /MIR
 if ($LASTEXITCODE -gt 7) { throw "robocopy jsonschema failed: $LASTEXITCODE" }
 ```
 
-- [ ] **Step 5: Add the standalone CI guard**
+- [ ] **Step 5: Add the standalone quality guard**
 
-After local contract validation in OSPS CI, add:
+After local contract validation in the OSPS Husky hook, add:
 
 ```yaml
 - name: Verify CPMS contract pin
@@ -692,8 +692,7 @@ This contains no machine-specific path. Updating `cpms_checksums.pinned.json` is
 cd C:\work\Cloud\project\CMP\src\osps
 py -3.12 -m uv run python -m osps.contracts.validate_contracts
 py -3.12 -m uv run pytest tests/contract -q
-rtk git add src/osps/contracts tests/contract .github/workflows/ci.yml
-rtk git commit -m "feat(OSPS-101): pin canonical CPMS contracts"
+Stop with the relevant files unstaged and propose `feat(OSPS-101): pin canonical CPMS contracts`; only stage or commit after explicit user authorization in the current turn.
 ```
 
 Expected: local tree validates and its manifest bytes equal the pinned canonical snapshot.
@@ -868,8 +867,8 @@ def classify_retry(
 py -3.12 -m uv run pytest tests/unit/openstack -q
 py -3.12 -m uv run ruff check src tests
 py -3.12 -m uv run mypy
-rtk git add src/osps/openstack tests/unit/openstack
-rtk git commit -m "feat(OSPS-103): normalize OpenStack errors and classify retries"
+Leave files unstaged and propose: `feat(OSPS-103): normalize OpenStack errors and classify retries`.
+Wait for explicit current-turn authorization before staging or committing.
 ```
 
 ---

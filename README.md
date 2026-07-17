@@ -43,4 +43,4 @@ $env:CPMS_RUN_INTEGRATION="1"
 py -3.12 -m uv run pytest -q
 ```
 
-CI definition: `.github/workflows/ci.yml`.
+Local pre-commit quality gate: `.husky/pre-commit` (install with `npm install`). GitLab CI will be added with the deployment pipeline.

@@ -26,11 +26,11 @@ Priorities use Must/Should/Could. Sprint allocation is the initial forecast and 
 - **Tasks:** live/ready endpoints, PostgreSQL 18 and RabbitMQ checks, Compose documentation alignment.
 - **Acceptance:** liveness is process-only; readiness becomes false when DB or RabbitMQ is unavailable; Valkey is not a CPMS readiness dependency.
 
-### CPMS-004 — CI quality pipeline
+### CPMS-004 — Local quality pipeline
 
 - **Sprint/Priority/Points:** 0 / Must / 5
 - **Depends on:** CPMS-001..003
-- **Acceptance:** CI runs lock verification, formatting, lint, typing, unit tests, integration tests with PostgreSQL/RabbitMQ, migration check, contract validation, and secret scan.
+- **Acceptance:** Husky pre-commit runs formatting, lint, typing, default tests, contract validation, and secret scan; infrastructure-backed gates are reserved for the GitLab pipeline.
 
 ## Epic CPMS-E1 — Contracts, persistence, and operations
 
@@ -219,4 +219,3 @@ Priorities use Must/Should/Could. Sprint allocation is the initial forecast and 
 - OpenStack notification-driven refresh.
 - Cursor pagination migration if offset performance becomes insufficient.
 - Shared contracts package after a second provider justifies it.
-

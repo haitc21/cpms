@@ -1,0 +1,19 @@
+run_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    uv "$@"
+  elif command -v py >/dev/null 2>&1; then
+    py -3.12 -m uv "$@"
+  else
+    python3 -m uv "$@"
+  fi
+}
+
+run_uv run ruff format --check src tests &&
+run_uv run ruff check src tests &&
+run_uv run mypy &&
+run_uv run pytest -q &&
+run_uv run python -m cpms.contracts.validate_contracts || exit 1
+
+git diff --cached --name-only --diff-filter=ACMR | while IFS= read -r file; do
+  run_uv run detect-secrets-hook --baseline .secrets.baseline "$file" || exit 1
+done
