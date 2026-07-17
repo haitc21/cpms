@@ -520,6 +520,30 @@ osps/
 
 CPMS is the source of truth for JSON Schema/OpenAPI contracts. OSPS keeps a pinned copy with `schema_version`. No shared Python package or schema registry is introduced initially. Cross-repository contract fixtures detect drift. A package can be extracted when a second provider makes manual synchronization costly.
 
+### 15.1 Python and dependency compatibility baseline
+
+Both services use CPython 3.12. Python 3.14 is not used even when available on a developer workstation because the selected OpenStackSDK release officially declares and tests Python 3.11 and 3.12. Development, CI, and runtime containers must use the same Python 3.12 minor line.
+
+The initial direct-dependency baseline, verified against published package metadata on 2026-07-17, is:
+
+| Component | Baseline | Service | Rationale |
+|---|---:|---|---|
+| CPython | `3.12` | CPMS, OSPS | Newest Python line explicitly classified by OpenStackSDK 4.17 |
+| OpenStackSDK | `4.17.0` | OSPS | Current SDK; requires Python 3.11+ and declares 3.11/3.12 |
+| FastAPI | `0.139.0` | CPMS, OSPS health API | Current Pydantic-v2-compatible API framework |
+| Pydantic | `2.13.4` | CPMS, OSPS | Common API/message validation and JSON Schema generation |
+| pydantic-settings | `2.13.x` | CPMS, OSPS | Typed environment configuration |
+| SQLAlchemy | `2.0.51` | CPMS | SQLAlchemy 2 async/session model |
+| Alembic | `1.18.5` | CPMS | SQLAlchemy schema migrations |
+| psycopg | `3.3.4` with pool/binary extras | CPMS | PostgreSQL 18-capable async/sync driver; do not use psycopg2 |
+| aio-pika | `10.0.1` | CPMS, OSPS | Python 3.11+ async RabbitMQ client with robust reconnect and publisher confirms |
+
+Patch versions are resolved and committed in a lockfile rather than floating at deployment time. `pyproject.toml` declares compatible release ranges for libraries that follow semantic versioning; the lockfile pins the exact transitive graph. Major/minor upgrades require unit, contract, integration, migration, and real-OpenStack smoke tests before the lockfile is refreshed.
+
+Runtime images use an explicit Python 3.12 slim digest or immutable patch tag. They must include only OS packages required by the resolved wheels and TLS/CA handling. CPMS and OSPS maintain separate lockfiles because OpenStackSDK and database dependencies belong to different services. CI tests the locked dependencies against PostgreSQL 18, RabbitMQ 4.1, Valkey 9.1.0 where applicable, and the available customer OpenStack API through discovery rather than release-specific assumptions.
+
+OpenStack compatibility is governed by service catalog discovery, negotiated API/microversions, capability tests, and SDK behavior—not by matching the Python/OpenStack release name. OSPS must not depend on deprecated `python-openstacksdk`, direct Nova/Neutron/Cinder client libraries, or SDK internals when a supported OpenStackSDK proxy/resource API exists.
+
 ## 16. Observability and future audit
 
 Structured logs include service, message/operation/correlation IDs, provider connection, resource type/ID, attempt, duration, and normalized error code. Secret filters apply before serialization. Metrics cover API latency/error, operation state/duration, queue lag/redelivery/DLQ, outbox backlog, sync counts/duration/items, provider call latency/error, and waiter outcomes.
