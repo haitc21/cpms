@@ -25,6 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    from cpms.runtime import configure_event_loop_policy
+
+    configure_event_loop_policy()
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from cpms.api.health import router as health_router
 from cpms.config import Settings, get_settings
+from cpms.infrastructure.health import HealthChecks
 from cpms.observability.logging import configure_logging
 from cpms.observability.middleware import CorrelationIdMiddleware
 
@@ -16,5 +18,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="CPMS", version="0.1.0")
     app.state.settings = resolved
+    app.state.health_checks = HealthChecks(resolved)
     app.add_middleware(CorrelationIdMiddleware)
+    app.include_router(health_router)
     return app

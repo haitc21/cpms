@@ -19,13 +19,9 @@ _SECRET_KEYS = {
 }
 
 _AUTH_HEADER_RE = re.compile(r"(?i)(authorization\s*[:=]\s*)(Bearer\s+\S+|\S+)")
-_PASSWORD_ASSIGN_RE = re.compile(
-    r'(?i)(password\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^\s,"]+)'
-)
+_PASSWORD_ASSIGN_RE = re.compile(r'(?i)(password\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^\s,"]+)')
 _TOKEN_ASSIGN_RE = re.compile(r'(?i)(token\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^\s,"]+)')
-_USER_DATA_ASSIGN_RE = re.compile(
-    r'(?i)(user_data\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^\s,"]+)'
-)
+_USER_DATA_ASSIGN_RE = re.compile(r'(?i)(user_data\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^\s,"]+)')
 
 
 def _is_secret_key(key: str) -> bool:

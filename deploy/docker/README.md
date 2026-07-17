@@ -29,6 +29,18 @@ RabbitMQ:   amqp://cmp:cmp_dev_password@127.0.0.1:5672/cmp
 Valkey:     valkey://:valkey_dev_password@127.0.0.1:6379/0
 ```
 
+CPMS runtime settings for the same stack:
+
+```text
+CPMS_ENVIRONMENT=development
+CPMS_DATABASE_URL=postgresql+psycopg://cpms:cpms_dev_password@127.0.0.1:5432/cpms
+CPMS_RABBITMQ_URL=amqp://cmp:cmp_dev_password@127.0.0.1:5672/cmp
+```
+
+CPMS readiness (`/health/ready`) depends on PostgreSQL and RabbitMQ only.
+Valkey remains available for future CMP services and is not a CPMS readiness
+dependency.
+
 ## Stop and reset
 
 ```powershell
