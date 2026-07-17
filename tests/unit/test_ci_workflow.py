@@ -10,11 +10,12 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_husky_pre_commit_defines_required_quality_gates() -> None:
     hook = (ROOT / ".husky" / "pre-commit").read_text(encoding="utf-8")
     required = [
+        "assert_staged_worktree_sync",
         "ruff format --check",
         "ruff check",
         "mypy",
         "pytest",
-        "detect-secrets-hook",
+        "run_detect_secrets_on_staged",
         "validate_contracts",
     ]
     missing = [item for item in required if item not in hook]

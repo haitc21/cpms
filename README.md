@@ -33,9 +33,8 @@ py -3.12 -m uv run pytest -q
 py -3.12 -m uv run alembic upgrade head
 py -3.12 -m uv run python -m cpms.contracts.validate_contracts
 py -3.12 -m uv run python -m cpms.contracts.write_manifest
-py -3.12 -m uv run python -m detect_secrets scan --baseline .secrets.baseline --exclude-files "(?i)(.*\.venv/.*|.*uv\.lock$|.*\.git/.*)"
+py -3.12 -m uv run python -m detect_secrets scan --baseline .secrets.baseline --exclude-files "(?i)(.*\.venv/.*|.*uv\.lock$|.*\.git/.*|(.*/)?checksums\.json$)"
 ```
-
 Integration tests against Compose are opt-in:
 
 ```powershell

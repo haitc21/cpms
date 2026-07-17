@@ -8,12 +8,22 @@ run_uv() {
   fi
 }
 
+# Staged blobs must match the working tree before gates that read files from disk.
+run_uv run python .husky/assert_staged_worktree_sync.py
+guard_status=$?
+if [ "$guard_status" -ne 0 ]; then
+  exit "$guard_status"
+fi
+
 run_uv run ruff format --check src tests &&
 run_uv run ruff check src tests &&
 run_uv run mypy &&
 run_uv run pytest -q &&
 run_uv run python -m cpms.contracts.validate_contracts || exit 1
 
-git diff --cached --name-only --diff-filter=ACMR | while IFS= read -r file; do
-  run_uv run detect-secrets-hook --baseline .secrets.baseline "$file" || exit 1
-done
+# NUL-safe staged path iteration (spaces/tabs/newlines) for detect-secrets.
+run_uv run python .husky/run_detect_secrets_on_staged.py
+secrets_status=$?
+if [ "$secrets_status" -ne 0 ]; then
+  exit "$secrets_status"
+fi
