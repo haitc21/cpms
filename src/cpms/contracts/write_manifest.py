@@ -9,7 +9,7 @@ def main() -> None:
     result = write_contract_manifest()
     if not result.ok:
         raise SystemExit(f"failed to write contract manifest: {result.message}")
-    print(f"manifest written ({result.fixture_count} fixtures)")
+    print(f"manifest written ({result.fixture_count} files)")
 
 
 if __name__ == "__main__":

@@ -18,66 +18,60 @@ class ValidationResult:
     message: str = ""
 
 
-def _compute_fixture_checksums(base: Path) -> dict[str, str]:
-    fixtures_dir = base / "fixtures"
-    if not fixtures_dir.exists():
-        return {}
-    fixture_files = sorted(
-        path for path in fixtures_dir.rglob("*") if path.is_file() and path.name != ".gitkeep"
-    )
+def _contract_files(base: Path) -> list[Path]:
+    files: list[Path] = []
+    for directory in ("fixtures", "jsonschema"):
+        root = base / directory
+        if root.exists():
+            files.extend(
+                path
+                for path in root.rglob("*")
+                if path.is_file() and path.name != ".gitkeep"
+            )
+    return sorted(files)
+
+
+def compute_contract_checksums(base: Path) -> dict[str, str]:
     return {
         path.relative_to(base).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in fixture_files
+        for path in _contract_files(base)
     }
 
 
 def validate_contract_tree(root: Path | None = None) -> ValidationResult:
-    """Validate fixture checksums against a committed manifest (read-only)."""
+    """Validate fixtures+jsonschema checksums against a committed manifest (read-only)."""
     base = root or CONTRACTS_ROOT
     manifest_path = base / "checksums.json"
-    computed = _compute_fixture_checksums(base)
-
+    computed = compute_contract_checksums(base)
     if not manifest_path.exists():
-        return ValidationResult(
-            ok=False,
-            fixture_count=len(computed),
-            message="missing checksums.json",
-        )
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    expected = manifest.get("fixtures", {})
-    if expected != computed:
-        return ValidationResult(
-            ok=False,
-            fixture_count=len(computed),
-            message="contract checksum mismatch",
-        )
-    return ValidationResult(ok=True, fixture_count=len(computed))
+        return ValidationResult(False, len(computed), "missing checksums.json")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ValidationResult(False, len(computed), "invalid checksums.json")
+    if manifest.get("files") != computed:
+        return ValidationResult(False, len(computed), "contract checksum mismatch")
+    return ValidationResult(True, len(computed))
 
 
 def write_contract_manifest(root: Path | None = None) -> ValidationResult:
-    """Create or refresh checksums.json from the current fixtures tree."""
+    """Create or refresh checksums.json from fixtures/ and jsonschema/."""
     base = root or CONTRACTS_ROOT
-    fixtures_dir = base / "fixtures"
-    fixtures_dir.mkdir(parents=True, exist_ok=True)
-    computed = _compute_fixture_checksums(base)
-    manifest_path = base / "checksums.json"
-    manifest_path.write_text(
-        json.dumps({"fixtures": computed}, indent=2, sort_keys=True) + "\n",
+    (base / "fixtures").mkdir(parents=True, exist_ok=True)
+    (base / "jsonschema").mkdir(parents=True, exist_ok=True)
+    computed = compute_contract_checksums(base)
+    (base / "checksums.json").write_text(
+        json.dumps({"files": computed}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    return ValidationResult(
-        ok=True,
-        fixture_count=len(computed),
-        message="manifest written",
-    )
+    return ValidationResult(True, len(computed), "manifest written")
 
 
 def main() -> None:
     result = validate_contract_tree()
     if not result.ok:
         raise SystemExit(f"contract validation failed: {result.message}")
-    print(f"contracts ok ({result.fixture_count} fixtures)")
+    print(f"contracts ok ({result.fixture_count} files)")
 
 
 if __name__ == "__main__":
